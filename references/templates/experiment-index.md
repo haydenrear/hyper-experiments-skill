@@ -43,7 +43,7 @@
 - code/
 - tensorboard/
 - checkpoints/
-- logs/
+- logs/{{data_artifact}}
 - plan.md
 - run.md
 - results.md

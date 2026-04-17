@@ -40,6 +40,7 @@ from _lib import (
 
 
 SUBDIRS = ("code", "logs", "tensorboard", "checkpoints", "artifacts")
+OPTIONAL_SUBDIRS = ("data",)
 FILE_TEMPLATES = {
     "index.md": "experiment-index.md",
     "plan.md": "plan.md",
@@ -72,6 +73,9 @@ def main() -> int:
                     help="Declared invariant. Repeatable.")
     ap.add_argument("--command", default="",
                     help="Exact launch command.")
+    ap.add_argument("--data", action="store_true",
+                    help="Also create a data/ subdirectory for dataset files "
+                         "or symlinks. Off by default.")
     args = ap.parse_args()
 
     if args.experiments_root is not None:
@@ -108,6 +112,8 @@ def main() -> int:
     exp_dir.mkdir()
     for sub in SUBDIRS:
         (exp_dir / sub).mkdir()
+    if args.data:
+        (exp_dir / "data").mkdir()
 
     parent_dir_rel = "null"
     if args.parent:
@@ -133,6 +139,7 @@ def main() -> int:
         "counterfactual_delta": bullet_list(args.delta) or "- TODO",
         "invariants": bullet_list(args.invariant) or "- TODO",
         "command": args.command or "TODO",
+        "data_artifact": "\n- data/" if args.data else "",
     }
 
     for out_name, tmpl_name in FILE_TEMPLATES.items():
