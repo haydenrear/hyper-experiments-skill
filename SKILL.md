@@ -39,7 +39,8 @@ python scripts/init_project.py \
 Creates:
 - `<root>/hyper-experiments.md` — the project marker; used by all other tooling to auto-detect project root,
 - `<root>/experiments/experiments.md` — the global research ledger,
-- `<root>/experiments/families/` — empty, populated by `new_experiment.py`.
+- `<root>/experiments/families/` — empty, populated by `new_experiment.py`,
+- `<root>/tools/` — empty, populated by the operator with shared cross-experiment tooling (see "Shared tools" below).
 
 Run this once when starting a new hyper-experiments project. If the user says "set up a hyper-experiments project here", run this script.
 
@@ -60,7 +61,14 @@ python scripts/new_experiment.py \
     --command "python train.py --config configs/exp-0002.yaml --resume ..."
 ```
 
-Creates `experiments/families/<family>/<exp-NNNN>-<slug>/` containing `index.md`, `plan.md`, `run.md`, `results.md`, `hypotheses.md`, and empty `code/`, `logs/`, `tensorboard/`, `checkpoints/`, `artifacts/` subdirectories. Also creates `experiments/families/<family>/index.md` on first use of a new family.
+Creates `experiments/families/<family>/<exp-NNNN>-<slug>/` containing:
+
+- top-level files: `index.md`, `plan.md`, `run.md`, `results.md`, `hypotheses.md`,
+- empty subdirs: `code/`, `logs/`, `tensorboard/`, `checkpoints/`,
+- `artifacts/` — `AGENTS.md` (agent instructions) + `memory.md` (cross-session scratch memory),
+- `data/` — `manifest.md` (dataset schema with references), `generation-scripts/`, `generated/`.
+
+Also creates `experiments/families/<family>/index.md` on first use of a new family.
 
 The script enforces the lineage object model but does *not* fill in decision criteria, key signals, or the measurement plan — those require human judgment. After scaffolding, complete `plan.md` and `index.md`, then add a row to `experiments/experiments.md` under "Active experiments".
 
@@ -73,6 +81,8 @@ Concrete markdown templates used by both scripts live in `references/templates/`
 - `family-index.md` — per-family index
 - `experiment-index.md` — per-experiment `index.md`
 - `plan.md`, `run.md`, `results.md`, `hypotheses.md` — the required experiment files
+- `artifacts-agents.md`, `artifacts-memory.md` — rendered to `artifacts/AGENTS.md` and `artifacts/memory.md`
+- `manifest.md` — rendered to `data/manifest.md`
 
 Templates use `{{var}}` substitution. Edit them in place to customize the scaffolded output for a given project.
 
@@ -245,6 +255,8 @@ Good example:
 The experiment tree should be organized like this:
 
 ```text
+hyper-experiments.md
+tools/
 experiments/
   experiments.md
   families/
@@ -261,7 +273,21 @@ experiments/
         tensorboard/
         checkpoints/
         artifacts/
+          AGENTS.md
+          memory.md
+        data/
+          manifest.md
+          generation-scripts/
+          generated/
 ```
+
+`artifacts/` holds agent-facing material (instructions and cross-session
+scratch memory) for whichever LLM or agent is operating the experiment.
+
+`data/` holds this experiment's datasets *and* pointers to datasets owned by
+other experiments — see "Data manifest and references" below. The `data/`
+subtree is always created even if the experiment produces no new data; in
+that case the manifest simply references what it inherits.
 
 A family directory may contain many sibling experiments. A child experiment must point back to its parent.
 
@@ -337,6 +363,119 @@ Must include:
 * empirical hypotheses,
 * operational hypotheses,
 * recommended next experiments.
+
+### `artifacts/AGENTS.md` and `artifacts/memory.md`
+
+`AGENTS.md` carries this experiment's agent operating instructions: role,
+preferred tools/scripts, boundaries, and handoff notes. `memory.md` is the
+agent's cross-session scratch pad — facts, gotchas, and pointers that don't
+belong in the chronological `run.md` or the post-run `results.md`.
+
+### `data/manifest.md`
+
+The data schema for this experiment. It declares:
+
+* generated datasets produced under `data/generated/`,
+* generation scripts under `data/generation-scripts/` that produced them,
+* references to datasets and scripts owned by other experiments.
+
+All reference paths in `manifest.md` are resolved **relative to the
+hyper-experiments project root** (the directory containing
+`hyper-experiments.md`). This makes references stable across families and
+across experiments, and avoids duplicating data on disk.
+
+---
+
+## Data manifest and references
+
+Each experiment owns the datasets it generates, and points at everything
+else. Downstream experiments do not copy ancestor data — they reference it
+through `data/manifest.md`. This keeps data ownership single-sourced and
+keeps the experiment tree cheap to branch.
+
+### Ownership rule
+
+An experiment **owns** a dataset when that dataset was physically produced
+by a script under its own `data/generation-scripts/` and written to its own
+`data/generated/`. An experiment **references** a dataset when it reads
+data that another experiment owns.
+
+### Reference resolution
+
+Every path in a `References` section of a `manifest.md` is interpreted
+relative to the project root (the directory containing
+`hyper-experiments.md`). For example:
+
+```
+experiments/families/q_schedule/exp-0003-lr-drop/data/generated/train.parquet
+```
+
+Tooling and agents should walk up from the current experiment to find the
+project root (the same walk the scaffolding scripts use) and resolve the
+reference from there. This works whether the referenced experiment lives in
+the same family or a different one.
+
+### When to reference vs. regenerate
+
+Reference when:
+
+* the ancestor dataset is fixed and the child's counterfactual does not
+  touch data generation,
+* reproducing the ancestor's pipeline would be expensive.
+
+Regenerate (own a fresh dataset) when:
+
+* the counterfactual delta includes the data pipeline itself
+  (tokenizer change, filtering change, new sampling distribution),
+* the ancestor's dataset is no longer considered valid.
+
+### Script inheritance
+
+Generation scripts can also be referenced from the manifest. A child
+experiment that wants to rerun the same pipeline under a tweaked config
+should reference the parent's script rather than copying it, and record
+the config delta in its `plan.md`.
+
+---
+
+## Shared tools
+
+`<root>/tools/` holds tooling that is **shared across experiments** and
+**not specific to any one experiment's counterfactual**. Put it here if it
+fits any of these:
+
+* launchers or wrapper scripts used by more than one experiment,
+* evaluation binaries / jars / CLIs,
+* dataset inspection or visualization utilities,
+* checkpoint management helpers,
+* environment or dependency manifests used by multiple experiments.
+
+Do **not** put the following in `tools/`:
+
+* an experiment's own generation pipeline — that belongs in
+  `<experiment>/data/generation-scripts/`,
+* the code snapshot being trained — that belongs in `<experiment>/code/`,
+* one-off analysis scripts tied to a single experiment — keep those in
+  the experiment directory.
+
+### Reference resolution
+
+Paths pointing into `tools/` from inside an experiment (from
+`manifest.md`, `run.md`, `plan.md`, or `index.md`) are resolved relative
+to the hyper-experiments project root, the same way dataset references
+are. Example:
+
+```
+tools/eval/run_probe_suite.py --checkpoint ...
+```
+
+### LLM rule
+
+When the operator introduces a new tool that will be used by more than
+one experiment — a launcher, an eval script, a jar, a helper CLI —
+place it under `tools/` from the start rather than inside the experiment
+that first needed it. Moving a tool out of an experiment later breaks
+references in that experiment's `manifest.md` and `run.md`.
 
 ---
 
@@ -673,10 +812,16 @@ Concrete markdown templates for every required file live in `references/template
 - `family-index.md` — per-family index
 - `experiment-index.md` — rendered to each experiment's `index.md`
 - `plan.md`, `run.md`, `results.md`, `hypotheses.md` — per-experiment files
+- `artifacts-agents.md` → `artifacts/AGENTS.md`
+- `artifacts-memory.md` → `artifacts/memory.md`
+- `manifest.md` → `data/manifest.md`
 
 See the "Required files per experiment" section above for the content each scaffolded stub must grow into before launch.
 
 Supported `{{var}}` substitutions: `experiment_id`, `slug`, `title`, `family`, `status`, `created_at`, `research_question`, `parent_experiment`, `parent_checkpoint`, `parent_directory`, `ancestor_baseline`, `counterfactual_delta`, `invariants`, `command`, `project_name`, `description`.
+
+Not every template uses every variable; templates not touched by a given
+variable pass it through untouched.
 
 To customize the scaffolded output for a project, edit the template files in place. To extend the `{{var}}` set, update `scripts/_lib.py` and the relevant CLI args in `scripts/new_experiment.py`.
 
