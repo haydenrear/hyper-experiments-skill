@@ -39,14 +39,21 @@ from _lib import (
 )
 
 
-SUBDIRS = ("code", "logs", "tensorboard", "checkpoints", "artifacts")
-OPTIONAL_SUBDIRS = ("data",)
+SUBDIRS = ("code", "logs", "tensorboard", "checkpoints")
+DATA_SUBDIRS = ("generation-scripts", "generated")
 FILE_TEMPLATES = {
     "index.md": "experiment-index.md",
     "plan.md": "plan.md",
     "run.md": "run.md",
     "results.md": "results.md",
     "hypotheses.md": "hypotheses.md",
+}
+ARTIFACT_FILES = {
+    "artifacts/AGENTS.md": "artifacts-agents.md",
+    "artifacts/memory.md": "artifacts-memory.md",
+}
+DATA_FILES = {
+    "data/manifest.md": "manifest.md",
 }
 
 
@@ -73,9 +80,6 @@ def main() -> int:
                     help="Declared invariant. Repeatable.")
     ap.add_argument("--command", default="",
                     help="Exact launch command.")
-    ap.add_argument("--data", action="store_true",
-                    help="Also create a data/ subdirectory for dataset files "
-                         "or symlinks. Off by default.")
     args = ap.parse_args()
 
     if args.experiments_root is not None:
@@ -112,8 +116,10 @@ def main() -> int:
     exp_dir.mkdir()
     for sub in SUBDIRS:
         (exp_dir / sub).mkdir()
-    if args.data:
-        (exp_dir / "data").mkdir()
+    (exp_dir / "artifacts").mkdir()
+    (exp_dir / "data").mkdir()
+    for sub in DATA_SUBDIRS:
+        (exp_dir / "data" / sub).mkdir()
 
     parent_dir_rel = "null"
     if args.parent:
@@ -139,10 +145,13 @@ def main() -> int:
         "counterfactual_delta": bullet_list(args.delta) or "- TODO",
         "invariants": bullet_list(args.invariant) or "- TODO",
         "command": args.command or "TODO",
-        "data_artifact": "\n- data/" if args.data else "",
     }
 
     for out_name, tmpl_name in FILE_TEMPLATES.items():
+        (exp_dir / out_name).write_text(
+            render_template(load_template(tmpl_name), vars_)
+        )
+    for out_name, tmpl_name in {**ARTIFACT_FILES, **DATA_FILES}.items():
         (exp_dir / out_name).write_text(
             render_template(load_template(tmpl_name), vars_)
         )

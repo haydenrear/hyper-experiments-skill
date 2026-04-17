@@ -43,7 +43,11 @@
 - code/
 - tensorboard/
 - checkpoints/
-- logs/{{data_artifact}}
+- logs/
+- artifacts/AGENTS.md, artifacts/memory.md — agent instructions and scratch memory
+- data/manifest.md — datasets, generation scripts, and references to other experiments' data
+- data/generation-scripts/ — scripts that produce this experiment's data
+- data/generated/ — locally produced datasets (may be empty if this experiment only references inherited data)
 - plan.md
 - run.md
 - results.md

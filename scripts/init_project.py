@@ -41,6 +41,7 @@ def main() -> int:
 
     root.mkdir(parents=True, exist_ok=True)
     (root / "experiments" / "families").mkdir(parents=True, exist_ok=True)
+    (root / "tools").mkdir(parents=True, exist_ok=True)
 
     vars_ = {
         "project_name": args.project_name,
@@ -58,6 +59,7 @@ def main() -> int:
     print(f"  - {ROOT_MARKER}")
     print(f"  - experiments/experiments.md")
     print(f"  - experiments/families/")
+    print(f"  - tools/")
     print()
     print("Next: create an experiment with scripts/new_experiment.py")
     return 0
