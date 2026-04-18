@@ -17,6 +17,13 @@ experiment, poll it, evaluate it, propose children).
 - Do **not** edit `index.md`'s Parent section after launch — lineage is frozen.
 - Do **not** overwrite `generated/` outputs without recording the regeneration
   in `run.md`.
+- Do **not** edit `code/` or `data/generation-scripts/` after launch. If a
+  change is needed, create a child experiment. See
+  `references/chain-of-custody.md`.
+- Do **not** launch this experiment until it has been frozen: `tools/python_exp`
+  vendored into `code/vendored/`, `[tool.uv.sources]` pointing inside this
+  experiment, every generation-script reference resolved to a local copy, and
+  the `Freeze` block in `run.md` filled in.
 - TODO — anything else this experiment considers off-limits.
 
 ## Conventions

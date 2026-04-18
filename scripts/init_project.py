@@ -43,6 +43,9 @@ def main() -> int:
     (root / "experiments" / "families").mkdir(parents=True, exist_ok=True)
     (root / "tools").mkdir(parents=True, exist_ok=True)
 
+    python_exp = root / "tools" / "python_exp"
+    (python_exp / "src" / "python_exp").mkdir(parents=True, exist_ok=True)
+
     vars_ = {
         "project_name": args.project_name,
         "description": args.description or "TODO",
@@ -55,11 +58,23 @@ def main() -> int:
     if not ledger.exists() or args.force:
         ledger.write_text(render_template(load_template("experiments.md"), vars_))
 
+    tools_pyproject = python_exp / "pyproject.toml"
+    if not tools_pyproject.exists() or args.force:
+        tools_pyproject.write_text(
+            render_template(load_template("tools-python-exp-pyproject.toml"), vars_)
+        )
+    tools_init = python_exp / "src" / "python_exp" / "__init__.py"
+    if not tools_init.exists() or args.force:
+        tools_init.write_text(
+            render_template(load_template("tools-python-exp-init.py"), vars_)
+        )
+
     print(f"Initialized hyper-experiments project at {root}")
     print(f"  - {ROOT_MARKER}")
     print(f"  - experiments/experiments.md")
     print(f"  - experiments/families/")
     print(f"  - tools/")
+    print(f"  - tools/python_exp/ (shared library, importable as `python_exp`)")
     print()
     print("Next: create an experiment with scripts/new_experiment.py")
     return 0

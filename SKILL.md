@@ -40,7 +40,8 @@ Creates:
 - `<root>/hyper-experiments.md` — the project marker; used by all other tooling to auto-detect project root,
 - `<root>/experiments/experiments.md` — the global research ledger,
 - `<root>/experiments/families/` — empty, populated by `new_experiment.py`,
-- `<root>/tools/` — empty, populated by the operator with shared cross-experiment tooling (see "Shared tools" below).
+- `<root>/tools/` — shared cross-experiment tooling (see "Shared tools" below),
+- `<root>/tools/python_exp/` — a standalone Python package named `python-exp` (importable as `python_exp`) that every experiment depends on via an editable `[tool.uv.sources]` link.
 
 Run this once when starting a new hyper-experiments project. If the user says "set up a hyper-experiments project here", run this script.
 
@@ -64,7 +65,8 @@ python scripts/new_experiment.py \
 Creates `experiments/families/<family>/<exp-NNNN>-<slug>/` containing:
 
 - top-level files: `index.md`, `plan.md`, `run.md`, `results.md`, `hypotheses.md`,
-- empty subdirs: `code/`, `logs/`, `tensorboard/`, `checkpoints/`,
+- empty subdirs: `logs/`, `tensorboard/`, `checkpoints/`,
+- `code/` — standalone **uv project** with a `pyproject.toml` named `<exp-id>-<slug>`; drop the experiment's code snapshot in here and run `uv sync` to reproduce its environment,
 - `artifacts/` — `AGENTS.md` (agent instructions) + `memory.md` (cross-session scratch memory),
 - `data/` — `manifest.md` (dataset schema with references), `generation-scripts/`, `generated/`.
 
@@ -111,6 +113,11 @@ Templates use `{{var}}` substitution. Edit them in place to customize the scaffo
 
 6. **Every experiment updates the research ledger**
    - Findings must be written back into the experiment tree and root experiment index.
+
+7. **Chain of custody is preserved at all times**
+   - A launched experiment must reproduce the same result every time it is re-run, forever.
+   - Shared code, shared scripts, and external state must be vendored into the experiment before launch so that updates to `tools/` never silently invalidate a historical experiment.
+   - See [`references/chain-of-custody.md`](references/chain-of-custody.md) for the full six-rule policy.
 
 ---
 
@@ -257,6 +264,11 @@ The experiment tree should be organized like this:
 ```text
 hyper-experiments.md
 tools/
+  python_exp/
+    pyproject.toml
+    src/
+      python_exp/
+        __init__.py
 experiments/
   experiments.md
   families/
@@ -269,6 +281,8 @@ experiments/
         results.md
         hypotheses.md
         code/
+          pyproject.toml
+          run_experiment.py
         logs/
         tensorboard/
         checkpoints/
@@ -371,6 +385,42 @@ preferred tools/scripts, boundaries, and handoff notes. `memory.md` is the
 agent's cross-session scratch pad — facts, gotchas, and pointers that don't
 belong in the chronological `run.md` or the post-run `results.md`.
 
+### `code/` — standalone uv project linked to `python_exp`
+
+Each experiment's `code/` directory is its own **uv project** with a
+`pyproject.toml` whose project name is `<experiment_id>-<slug>`. It
+depends on `python-exp` (the shared library at `tools/python_exp/`)
+through `[tool.uv.sources]` as an editable install, using a path relative
+to `code/`:
+
+```toml
+[project]
+dependencies = ["python-exp"]
+
+[tool.uv.sources]
+python-exp = { path = "../../../../../tools/python_exp", editable = true }
+```
+
+The scaffolder also writes `code/run_experiment.py` exposing a
+`run-experiment` console script wired up under `[project.scripts]`, so a
+freshly scaffolded experiment is immediately runnable.
+
+The purpose is reproducibility of individual experiments across time:
+
+* going back to a 6-month-old experiment and running
+  `uv sync && uv run run-experiment` inside its `code/` must produce a
+  working environment without pulling in newer dependency versions chosen
+  by a sibling experiment,
+* shared library code lives in one place (`tools/python_exp/`) and every
+  experiment picks it up as an editable dependency — so improving a
+  shared helper does not require copy-edits across experiments,
+* if the counterfactual delta includes a dependency change
+  (library version bump, new dep), that change is visible in this
+  `pyproject.toml` and is part of the declared delta.
+
+Treat `code/pyproject.toml` as part of the experiment's frozen state after
+launch, the same way the code snapshot itself is frozen.
+
 ### `data/manifest.md`
 
 The data schema for this experiment. It declares:
@@ -441,22 +491,49 @@ the config delta in its `plan.md`.
 ## Shared tools
 
 `<root>/tools/` holds tooling that is **shared across experiments** and
-**not specific to any one experiment's counterfactual**. Put it here if it
-fits any of these:
+**not specific to any one experiment's counterfactual**. It contains:
 
-* launchers or wrapper scripts used by more than one experiment,
-* evaluation binaries / jars / CLIs,
-* dataset inspection or visualization utilities,
-* checkpoint management helpers,
-* environment or dependency manifests used by multiple experiments.
+* `tools/python_exp/` — a standalone Python package, the canonical home
+  for shared functions and modules imported by experiments,
+* any other shared assets (jars, external binaries, bash/CLI wrappers,
+  dataset inspection utilities, etc.).
 
-Do **not** put the following in `tools/`:
+### `tools/python_exp` — the shared Python library
+
+`tools/python_exp/` is itself a uv/setuptools project:
+
+```
+tools/python_exp/
+  pyproject.toml    # project name: "python-exp"
+  src/
+    python_exp/     # import name
+      __init__.py
+```
+
+Every experiment's `code/pyproject.toml` depends on `python-exp` via an
+editable `[tool.uv.sources]` path. Concretely: when an experiment runs
+`uv sync`, uv installs `tools/python_exp/` in editable mode into the
+experiment's virtual environment, so `import python_exp` resolves to the
+currently-checked-out shared code.
+
+Put shared functions here as soon as more than one experiment needs them.
+Prefer adding to `python_exp` over vendoring helpers into an individual
+experiment's `code/`.
+
+### What belongs in `tools/` but **not** in `python_exp`
+
+* non-Python assets (jars, binaries, shell scripts, Dockerfiles),
+* Python tools that should stay isolated from the shared library
+  (e.g. a heavyweight eval suite with conflicting deps) — those can
+  live in their own subproject under `tools/<name>/` with their own
+  `pyproject.toml`.
+
+### What does **not** belong in `tools/` at all
 
 * an experiment's own generation pipeline — that belongs in
   `<experiment>/data/generation-scripts/`,
 * the code snapshot being trained — that belongs in `<experiment>/code/`,
-* one-off analysis scripts tied to a single experiment — keep those in
-  the experiment directory.
+* one-off analysis scripts tied to a single experiment.
 
 ### Reference resolution
 
@@ -471,11 +548,36 @@ tools/eval/run_probe_suite.py --checkpoint ...
 
 ### LLM rule
 
-When the operator introduces a new tool that will be used by more than
-one experiment — a launcher, an eval script, a jar, a helper CLI —
-place it under `tools/` from the start rather than inside the experiment
-that first needed it. Moving a tool out of an experiment later breaks
-references in that experiment's `manifest.md` and `run.md`.
+When the operator introduces shared Python functionality, put it in
+`tools/python_exp/src/python_exp/` — never vendor a copy into an
+experiment's `code/`. For non-Python shared tooling, drop it under
+`tools/` from the start rather than inside the experiment that first
+needed it. Moving a tool out of an experiment later breaks references in
+that experiment's `manifest.md` and `run.md`, and breaks `uv sync` for
+any experiment whose `[tool.uv.sources]` paths change.
+
+---
+
+## Running an experiment
+
+From the hyper-experiments project root:
+
+```bash
+uv sync  --project experiments/families/<family>/<exp-id>-<slug>/code
+uv run   --project experiments/families/<family>/<exp-id>-<slug>/code run-experiment
+```
+
+Or from inside the experiment's `code/` directory:
+
+```bash
+uv sync
+uv run run-experiment
+```
+
+The experiment's pyproject declares an editable dependency on
+`tools/python_exp/` via `[tool.uv.sources]`, so `run-experiment` and any
+shared imports resolve to the currently-checked-out shared library
+without a separate install step.
 
 ---
 
@@ -525,6 +627,68 @@ A table with:
 ### Meta-hypotheses across families
 
 A running summary of reusable conclusions from the full experiment graph.
+
+---
+
+## Chain of custody
+
+A launched experiment must reproduce the same result every time it is
+re-run — including six months later when a new mechanistic
+interpretability tool is applied to its checkpoints. The scaffolded
+project is ergonomic (shared library, editable install, data references
+across experiments), but that ergonomics is a **liability** for old
+experiments: if `tools/python_exp/` or an ancestor's generation script
+is updated after an experiment has been launched, re-running that
+experiment silently measures a different system.
+
+The full policy lives at `references/chain-of-custody.md`. The short
+version:
+
+1. **Self-containment.** Every launched experiment must be reproducible
+   from only its own `code/`, `data/`, and `checkpoints/`, plus any
+   frozen ancestor data it explicitly references.
+
+2. **Vendor shared code before launch.** Before marking the experiment
+   `running`, copy `tools/python_exp/` into
+   `<experiment>/code/vendored/python_exp/` and rewrite
+   `code/pyproject.toml`:
+
+   ```toml
+   [tool.uv.sources]
+   python-exp = { path = "./vendored/python_exp" }
+   ```
+
+   Drop the `editable = true` flag. Do the same for any other shared
+   tool (binary, jar, CLI) the experiment calls directly.
+
+3. **Vendor shared generation scripts.** If the manifest references a
+   generation script owned by another experiment, copy it into this
+   experiment's `data/generation-scripts/` and rewrite the manifest
+   entry. Referencing another experiment's **generated data** (output,
+   not script) is allowed only if that ancestor is itself frozen.
+
+4. **Freeze means frozen.** After launch, `code/`, `data/generation-
+   scripts/`, `data/generated/`, and existing checkpoints do not
+   change. Corrections are expressed as child experiments, not
+   edits.
+
+5. **Shared tools evolve freely for future experiments.** Updates to
+   `tools/python_exp/` benefit every experiment launched after the
+   update. Experiments launched before the update are untouched
+   because they vendored the old version.
+
+6. **Record the freeze.** Fill in the `Freeze` block in `run.md` at
+   launch time — what was vendored, when, what SHAs, any deviation from
+   the shared version. Without this block the chain of custody cannot be
+   audited.
+
+### LLM rule
+
+When asked to launch an experiment, the LLM must refuse to proceed until
+`code/vendored/` is populated, `[tool.uv.sources]` points inside the
+experiment, every manifest script reference is local, and the `Freeze`
+block in `run.md` has been filled in. "Editable link works on my
+machine" is not a valid reason to skip the freeze.
 
 ---
 
@@ -583,7 +747,25 @@ Write:
 
 The child `index.md` must point to its parent.
 
-### 6. Run the experiment
+### 6. Freeze (chain of custody)
+
+Before launching, vendor every piece of shared state the experiment
+depends on:
+
+* copy `tools/python_exp/` into `<experiment>/code/vendored/python_exp/`
+  and rewrite `[tool.uv.sources]` in `code/pyproject.toml` to point at
+  `./vendored/python_exp` without `editable = true`,
+* copy any shared non-Python tool (binary, jar, CLI) the experiment
+  will invoke into the experiment's own tree,
+* copy any generation script referenced from another experiment into
+  `data/generation-scripts/` and rewrite `data/manifest.md`,
+* run `uv sync && uv run run-experiment` inside `code/` to confirm the
+  frozen experiment is self-reproducible,
+* fill in the `Freeze` block in `run.md` (paths, SHAs, timestamp).
+
+Do not proceed to step 7 until the freeze block is filled in.
+
+### 7. Run the experiment
 
 Launch the command and record:
 
@@ -593,7 +775,7 @@ Launch the command and record:
 * git commit or code snapshot identity,
 * parent checkpoint used.
 
-### 7. Poll the experiment
+### 8. Poll the experiment
 
 Poll on a fixed cadence.
 
@@ -606,7 +788,7 @@ At each poll:
 
 Record each poll in `run.md`.
 
-### 8. Finish the experiment
+### 9. Finish the experiment
 
 When the run is done or stopped:
 
@@ -614,7 +796,7 @@ When the run is done or stopped:
 * generate hypotheses,
 * determine whether the original expectation was supported, weakened, or contradicted.
 
-### 9. Update the ledger
+### 10. Update the ledger
 
 Update:
 
@@ -630,7 +812,7 @@ Include:
 * recommended next experiments,
 * pointer to experiment directory and TensorBoard log.
 
-### 10. Promote promising checkpoints
+### 11. Promote promising checkpoints
 
 If the experiment produced a useful regime, mark its checkpoint as a strong future parent candidate.
 
@@ -815,6 +997,10 @@ Concrete markdown templates for every required file live in `references/template
 - `artifacts-agents.md` → `artifacts/AGENTS.md`
 - `artifacts-memory.md` → `artifacts/memory.md`
 - `manifest.md` → `data/manifest.md`
+- `code-pyproject.toml` → `code/pyproject.toml`
+- `code-run-experiment.py` → `code/run_experiment.py`
+- `tools-python-exp-pyproject.toml` → `tools/python_exp/pyproject.toml` (written by `init_project.py`)
+- `tools-python-exp-init.py` → `tools/python_exp/src/python_exp/__init__.py` (written by `init_project.py`)
 
 See the "Required files per experiment" section above for the content each scaffolded stub must grow into before launch.
 
