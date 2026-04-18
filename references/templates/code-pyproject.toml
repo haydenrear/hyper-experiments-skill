@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "{{experiment_id}}-{{slug}}"
+version = "0.1.0"
+description = "{{title}}"
+requires-python = ">=3.10"
+dependencies = ["python-exp"]
+
+[project.scripts]
+run-experiment = "run_experiment:main"
+
+[tool.setuptools]
+py-modules = ["run_experiment"]
+
+[tool.uv.sources]
+python-exp = { path = "../../../../../tools/python_exp", editable = true }
+
+# This experiment's code snapshot is a standalone uv project so the
+# experiment can be reproduced later without depending on project-wide
+# environment state. Add dependencies above and run `uv sync` inside this
+# directory to build an isolated environment for the run.
+#
+# The shared library `python-exp` is resolved through `[tool.uv.sources]`
+# to `<root>/tools/python_exp` as an editable install, so changes to
+# shared tools are picked up without reinstalling.
+#
+# CHAIN OF CUSTODY: the editable link above is for development convenience
+# only. Before this experiment is launched (status moves from `planned`
+# to `running`), you MUST vendor `tools/python_exp/` into
+# `./vendored/python_exp/` and rewrite the source above to:
+#
+#   [tool.uv.sources]
+#   python-exp = { path = "./vendored/python_exp" }
+#
+# without `editable = true`. This makes the experiment reproducible
+# forever, independent of future changes to `tools/python_exp/`.
+# See `references/chain-of-custody.md` for the full policy.
+#
+# Keep this file versioned with the code snapshot. If the counterfactual
+# delta includes a dependency change, that change must be visible here.

@@ -55,6 +55,10 @@ ARTIFACT_FILES = {
 DATA_FILES = {
     "data/manifest.md": "manifest.md",
 }
+CODE_FILES = {
+    "code/pyproject.toml": "code-pyproject.toml",
+    "code/run_experiment.py": "code-run-experiment.py",
+}
 
 
 def main() -> int:
@@ -151,7 +155,7 @@ def main() -> int:
         (exp_dir / out_name).write_text(
             render_template(load_template(tmpl_name), vars_)
         )
-    for out_name, tmpl_name in {**ARTIFACT_FILES, **DATA_FILES}.items():
+    for out_name, tmpl_name in {**ARTIFACT_FILES, **DATA_FILES, **CODE_FILES}.items():
         (exp_dir / out_name).write_text(
             render_template(load_template(tmpl_name), vars_)
         )
