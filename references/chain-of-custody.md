@@ -91,11 +91,16 @@ forbidden — that experiment has not yet committed to its data pipeline.
 Once an experiment is `running`, `completed`, or `archived`:
 
 * `code/` is append-only for logs that happen to live there; the source
-  snapshot and `pyproject.toml` do not change,
+  snapshot, `pyproject.toml`, and `run_config.json` do not change,
 * `data/generation-scripts/` does not change,
 * `data/generated/` does not change,
 * `checkpoints/` only receives new checkpoints from the same run —
   existing checkpoints are immutable.
+
+`run_config.json` is part of the frozen state specifically because it
+encodes the hyperparameters the experiment was actually running with:
+changing it post-launch turns the historical measurement into a claim
+about a configuration that never actually ran.
 
 If new information arises that would require editing one of these,
 **create a child experiment** (a counterfactual whose delta is precisely
@@ -110,6 +115,23 @@ expected, to evolve. Improvements there benefit every **future**
 experiment that vendors the improved version at its own launch time.
 Past experiments that vendored earlier versions are unaffected. This is
 the point of vendoring.
+
+When editing `tools/python_exp/`, run
+`python scripts/check_regressions.py` from the project root before
+committing. That script invokes every experiment's
+`code/check_regressions.py` against the CURRENT shared library — which
+tells you:
+
+* whether your edit would break any existing experiment's contract if
+  that experiment were re-vendored (the safe-to-re-vendor check),
+* which experiments have a contract loose enough that they do not
+  notice the change (the can-always-re-vendor case).
+
+Neither result affects the frozen experiments themselves — those
+remain pinned to their vendored copy — but it tells you whether the
+evolution of `tools/` has diverged from any past experiment's
+expectations, which is a prerequisite for any re-run against current
+tooling.
 
 ### Rule 6 — Record the vendoring
 

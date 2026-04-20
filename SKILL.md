@@ -38,8 +38,9 @@ python scripts/init_project.py \
 
 Creates:
 - `<root>/hyper-experiments.md` — the project marker; used by all other tooling to auto-detect project root,
-- `<root>/experiments/experiments.md` — the global research ledger,
-- `<root>/experiments/families/` — empty, populated by `new_experiment.py`,
+- `<root>/experiments/experiments.md` — the operational research ledger (backward-looking: active/completed runs, best checkpoints),
+- `<root>/experiments/families/` — populated by `new_experiment.py`,
+- `<root>/experiments/families/index.md` — cross-family planning index (forward-looking: theories, recommendations, and plans spanning multiple families; see "Index layers" below),
 - `<root>/tools/` — shared cross-experiment tooling (see "Shared tools" below),
 - `<root>/tools/python_exp/` — a standalone Python package named `python-exp` (importable as `python_exp`) that every experiment depends on via an editable `[tool.uv.sources]` link.
 
@@ -74,13 +75,161 @@ Also creates `experiments/families/<family>/index.md` on first use of a new fami
 
 The script enforces the lineage object model but does *not* fill in decision criteria, key signals, or the measurement plan — those require human judgment. After scaffolding, complete `plan.md` and `index.md`, then add a row to `experiments/experiments.md` under "Active experiments".
 
+### `scripts/branch_experiment.py` — branch (deep-copy) an experiment
+
+Where `new_experiment.py` scaffolds a child from templates,
+`branch_experiment.py` creates a child by **deep-copying an existing
+experiment**, rewriting the identity, and stamping a branch-provenance
+record into the new `index.md`. Use it when the child should start from
+the parent's actual implementation state — custom code in `code/`, any
+`vendored/` shared library, the parent's exact `run_config.json`
+hyperparameters — rather than from fresh templates.
+
+```bash
+python scripts/branch_experiment.py \
+    --from exp-0003 \
+    --title "drop weight decay" \
+    --question "Does removing WD hurt val loss?" \
+    --delta "weight_decay: 0.1 -> 0.0" \
+    --invariant "LR schedule unchanged"
+    # optional:
+    # --family q_schedule        # defaults to source's family
+    # --parent exp-XXXX          # defaults to --from
+    # --checkpoint <path>
+    # --ancestor <exp-id>
+    # --command "..."
+```
+
+Copied verbatim from the source:
+
+- `code/` tree in full (including `vendored/` if the source was already frozen),
+- `data/generation-scripts/`,
+- `data/manifest.md`,
+- `code/run_config.json` — merged through the template so name-bearing
+  slots (`experiment_id`, `slug`, `run_name`, `logging.wandb.run_name`,
+  `logging.wandb.tags`) are rewritten for the child and every other
+  hyperparameter is inherited byte-for-byte. The script emits the same
+  rename report as `new_experiment.py`.
+
+Rewritten in place in the copied tree:
+
+- `code/pyproject.toml` `name` and `description` fields (the project
+  name must match `<exp-id>-<slug>`).
+
+Generated fresh from templates, with the child's identity and a
+populated **Branch provenance** block:
+
+- `index.md`, `plan.md`, `run.md`, `results.md`, `hypotheses.md`,
+- `artifacts/AGENTS.md`, `artifacts/memory.md`.
+
+Left empty:
+
+- `logs/`, `tensorboard/`, `checkpoints/`, `data/generated/`.
+
+What the script **does not** touch:
+
+- `code/run_experiment.py` and `code/check_regressions.py` docstrings
+  (they may still reference the source's id/title — the branch report
+  reminds the operator to review them).
+
+#### Branch vs. scaffold — which to use
+
+| Use `new_experiment.py` when… | Use `branch_experiment.py` when… |
+|---|---|
+| The parent is another experiment in principle only; the child's code comes from templates or a separate snapshot. | The child should start from the parent's actual `code/` contents (custom modifications, vendored library, frozen deps). |
+| The counterfactual delta is a hyperparameter that fits in `run_config.json` and `plan.md`. | The counterfactual delta is a small edit on top of the parent's exact implementation. |
+| You are starting a new family or a fresh line of inquiry. | You are iterating within an existing line where the parent's code state is the baseline. |
+
+#### Chain-of-custody note
+
+A copied `vendored/` captures the **source's** freeze, not the child's.
+The child must still perform its own freeze procedure (see
+`references/chain-of-custody.md`) before launch: verify that
+`code/vendored/python_exp/` is the version this experiment intends to
+be pinned to, and fill in the `Freeze` block in the child's `run.md`.
+The branch report prints this reminder explicitly.
+
+#### Branch provenance in `index.md`
+
+Every experiment's `index.md` carries a `## Branch provenance` block:
+
+- for a scaffolded experiment: `Branched from: null` / `Branched at: null`,
+- for a branched experiment: the source id, the ISO timestamp of the
+  branch action, and the list of paths copied from the source.
+
+`parent_experiment` (conceptual lineage) is separate from
+`branched_from` (physical deep-copy source). They are usually the same
+id, but `branched_from` may differ when a child is branched from a
+sibling for code convenience while its counterfactual parent is
+elsewhere — the branch provenance block documents that distinction.
+
+### `scripts/check_regressions.py` — test shared tools against every experiment's contract
+
+Walks every experiment under `experiments/families/` and runs its
+`code/check_regressions.py` (the `check-regressions` console script)
+against the CURRENT `tools/python_exp/`, force-installing it over any
+vendored copy inside each experiment's venv. Reports which experiments
+would break if re-vendored against the current shared library.
+
+```bash
+python scripts/check_regressions.py
+```
+
+Exit code is 0 only if every experiment passes. Run this after editing
+anything in `tools/python_exp/` and before updating a frozen
+experiment's vendoring.
+
+### `tb-query` — query TensorBoard event files from the CLI
+
+`tb-query` (installed at `/usr/local/bin/tb-query`; source:
+https://github.com/Alir3z4/tb-query) is the default lens for inspecting
+an experiment's TensorBoard event files during polling and post-run
+analysis. It emits JSON, so its output is consumable both by humans and
+by the LLM operating the experiment loop — prefer it over spinning up a
+full `tensorboard` server when a single numeric answer will do.
+
+Subcommands (run `tb-query <cmd> --help` for the authoritative flags):
+
+- `tb-query find <dir>` — list every event file under a directory.
+- `tb-query tags <event_file> [--filter <substr>]` — list scalar tags, optionally filtered.
+- `tb-query query <event_file> [--tags <tag>...] [--start_step N] [--end_step N]` — dump scalar values as JSON.
+- `tb-query stats <event_file> --tags <tag>...` — min/max/mean/std per tag.
+- `tb-query steps <event_file> --tags <tag>...` — the step indices each tag was written at.
+- `tb-query correlation <event_file> <tags> [--start_step N] [--end_step N] [--display-interpretation BOOL] [--rounding N]` — scalar-to-scalar correlation between tags.
+
+Typical usage at each poll (see "Polling protocol" below):
+
+```bash
+EXP=experiments/families/<family>/<exp-id>-<slug>
+EVT=$(tb-query find "$EXP/tensorboard" | head -1)
+
+tb-query tags  "$EVT" --filter loss --filter grad_norm
+tb-query stats "$EVT" --tags train/loss --tags val/loss --tags grad_norm
+tb-query query "$EVT" --tags val/loss --start_step <last_poll_step>
+```
+
+For counterfactual comparison against a parent or sibling, run the same
+`query` / `stats` against the ancestor's event file and diff the two
+JSON blobs — this is how `delta_val_loss_vs_parent` and friends (see
+"Counterfactual comparison signals") are computed when no automated
+derived metric exists yet.
+
+`tb-query` is a system-wide read-only CLI: it only reads event files and
+never mutates the experiment, so it is **not** part of the measured
+system and is not subject to the chain-of-custody vendoring rules in
+`references/chain-of-custody.md`. However, if a specific `tb-query`
+version produced a number that ends up in `results.md` (especially
+`correlation` output), record the version alongside the number so the
+analysis itself stays reproducible.
+
 ### Templates
 
 Concrete markdown templates used by both scripts live in `references/templates/`:
 
 - `hyper-experiments.md` — project marker
-- `experiments.md` — root research ledger
-- `family-index.md` — per-family index
+- `experiments.md` — root operational ledger
+- `families-index.md` — cross-family strategy index (rendered to `experiments/families/index.md`)
+- `family-index.md` — per-family strategy index (rendered to `experiments/families/<family>/index.md`)
 - `experiment-index.md` — per-experiment `index.md`
 - `plan.md`, `run.md`, `results.md`, `hypotheses.md` — the required experiment files
 - `artifacts-agents.md`, `artifacts-memory.md` — rendered to `artifacts/AGENTS.md` and `artifacts/memory.md`
@@ -272,6 +421,7 @@ tools/
 experiments/
   experiments.md
   families/
+    index.md
     <family_name>/
       index.md
       <experiment_id>-<slug>/
@@ -283,6 +433,8 @@ experiments/
         code/
           pyproject.toml
           run_experiment.py
+          run_config.json
+          check_regressions.py
         logs/
         tensorboard/
         checkpoints/
@@ -307,6 +459,75 @@ A family directory may contain many sibling experiments. A child experiment must
 
 ---
 
+## Index layers
+
+Planning and orchestration happen at three layers. Each layer has a
+different scope, a different update cadence, and a different reader.
+Do not merge them: collapsing any two into one produces a document
+that is either too noisy to plan from or too abstract to act on.
+
+### Layer 1 — Operational ledger: `experiments/experiments.md`
+
+Backward-looking. What was run, what is running, what finished, which
+checkpoints are strong branching points. One row per experiment. This
+is the source of truth for questions like "what is exp-0042's status?"
+or "what are our active experiments this week?"
+
+Update cadence: every time an experiment's status changes (launched,
+stopped, completed, archived) and every time a checkpoint is promoted
+to a strong branching point.
+
+### Layer 2 — Cross-family index: `experiments/families/index.md`
+
+Forward-looking, project-wide strategy. Theories, config
+recommendations, and plans that span more than one family.
+Meta-observations about the research process itself. The answer to
+"what have we learned across the whole project?" and "which family
+should we invest in next?"
+
+Update cadence: when a result in one family affects another, when a
+cross-family theory crystallizes or falls, when a new family is
+proposed.
+
+### Layer 3 — Per-family index: `experiments/families/<family>/index.md`
+
+Forward-looking, scoped to one family. The theory of the family —
+what the family currently believes, what configs have proved robust,
+which experiments are proposed next, which open questions remain. The
+answer to "what should the next experiment in this family look like?"
+
+Update cadence: every time an experiment in the family finishes, every
+time a new proposed experiment is born or retired, every time a theory
+in the family is strengthened or weakened.
+
+### Distinction from per-experiment files
+
+Per-experiment `plan.md`, `results.md`, and `hypotheses.md` are scoped
+to a single experiment and are frozen with the experiment. The index
+layers live *above* individual experiments and evolve continuously as
+new evidence accumulates. When an experiment's `hypotheses.md` produces
+a hypothesis that matters to the family, promote it into the family
+index; when it matters across families, promote it into the cross-
+family index.
+
+### LLM rule
+
+After updating `results.md` and `hypotheses.md` for a finishing
+experiment, the LLM must also:
+
+1. append the one-line finding to the "Experiments in this family"
+   table in the family's `index.md`,
+2. revisit the family's "Working theories", "Config recommendations",
+   and "Proposed future experiments" lists and update each one
+   affected by the new result,
+3. ask whether any of those updates also belong in the cross-family
+   `families/index.md`, and promote them if so.
+
+Updating only `experiments/experiments.md` without touching the two
+strategy layers is an incomplete close-out.
+
+---
+
 ## Required files per experiment
 
 ### `index.md`
@@ -322,6 +543,7 @@ Must include:
 * parent experiment,
 * parent checkpoint,
 * parent directory,
+* branch provenance (`branched_from`, `branched_at`, list of files copied — `null` when scaffolded from templates rather than branched; see `scripts/branch_experiment.py`),
 * research question,
 * counterfactual delta,
 * invariants,
@@ -420,6 +642,94 @@ The purpose is reproducibility of individual experiments across time:
 
 Treat `code/pyproject.toml` as part of the experiment's frozen state after
 launch, the same way the code snapshot itself is frozen.
+
+### `code/check_regressions.py` — contract assertions against `python_exp`
+
+The scaffolder also writes a `check_regressions.py` module at the root
+of `code/`, exposed as a console script `check-regressions`. Its job is
+to assert this experiment's contract against `python_exp`: every symbol
+imported, every behavioral invariant the experiment relies on.
+
+It complements, rather than replaces, chain-of-custody vendoring:
+
+* **vendoring** makes the frozen experiment reproduce identically
+  forever against its own copy of `python_exp`,
+* **`check_regressions.py`** tells us whether the experiment's contract
+  is still satisfied by the *current* shared library — i.e. whether it
+  would be safe to re-vendor this experiment against a newer
+  `tools/python_exp/`, or whether a recent shared-library change has
+  broken an old experiment's expectations.
+
+When invoked locally (`uv run check-regressions`) it runs against
+whatever `python_exp` is installed in this experiment's venv
+(vendored if frozen, editable link if still planning). When invoked
+by the project-wide runner `scripts/check_regressions.py`, the current
+root `tools/python_exp/` is force-installed into the venv first, so the
+contract is evaluated against the current shared library regardless of
+freeze status.
+
+Keep each experiment's `check_regressions.py` cheap to run (seconds,
+not minutes): the project-wide runner invokes every experiment's check
+in sequence and is meant to be usable after every non-trivial edit to
+`tools/python_exp/`. Do not load checkpoints or large datasets here.
+
+### `code/run_config.json` — parent-aware inheritance
+
+This is the machine-readable configuration consumed by
+`run_experiment.py`. Every experiment has one. When a child is
+scaffolded, `run_config.json` is *inherited from the parent*, not
+rendered fresh: the child starts with every hyperparameter the parent
+was running with, and only the name-bearing slots are rewritten to
+match the child.
+
+The inheritance algorithm is:
+
+1. Load the `run_config.json` template (which has `{{placeholder}}`
+   strings at every name-bearing slot: `experiment_id`, `slug`,
+   `family`, `run_name`, `logging.wandb.run_name`, `logging.wandb.tags`,
+   and so on).
+2. Load the parent's `run_config.json`.
+3. Walk the template. Wherever it holds a placeholder string, the
+   child's rendered value replaces whatever the parent had. Everywhere
+   else, the parent's value is inherited verbatim.
+4. Any keys present only in the parent (hyperparameters the operator
+   added after the parent was scaffolded) are kept as-is.
+5. Any keys present only in the template but not in the parent are
+   added to the child with rendered values.
+
+The scaffolder prints a **rename report** after creating the child:
+
+```
+run_config.json: inherited from experiments/families/.../code/run_config.json.
+  Name-bearing fields updated for this experiment:
+    - experiment_id: "exp-0001" -> "exp-0002"
+    - run_name: "exp-0001-lower-lr" -> "exp-0002-lr-drop"
+    - logging.wandb.run_name: "exp-0001-lower-lr" -> "exp-0002-lr-drop"
+  Remaining hyperparameters were inherited verbatim.
+  Before launch, cross-check every inherited value against this
+  experiment's counterfactual delta and update run_config.json for
+  anything that is part of the declared delta.
+```
+
+The report doubles as a prompt for the operator / LLM: it enumerates
+exactly what was rewritten (so none of those renames slips past review),
+and it reminds the reader that *inherited hyperparameters are the
+ancestor's choices, not this experiment's counterfactual*. Any
+hyperparameter listed in the child's counterfactual delta must be
+updated in `run_config.json` before launch, or the experiment is a
+clone of its parent rather than a child of it.
+
+Special cases:
+
+* If the child has no parent, the template is rendered fresh.
+* If the parent has no `run_config.json` (e.g. it was a first-pass
+  experiment scaffolded before this feature existed), the template is
+  rendered fresh for the child and the report says so.
+
+After launch, `run_config.json` is **frozen** together with everything
+else under `code/` (see chain-of-custody). If a follow-up experiment
+needs a different configuration, it should be a new child — not an
+edit to a launched experiment's config.
 
 ### `data/manifest.md`
 
@@ -581,11 +891,137 @@ without a separate install step.
 
 ---
 
-## Root experiment ledger
+## TensorBoard logging
 
-The file `experiments/experiments.md` is the global research ledger.
+Experiments log observations as TensorBoard event files under
+`<experiment>/tensorboard/`. Those event files are the single source of
+truth for run metrics — poll inspection via `tb-query`, post-run
+analysis, and counterfactual comparison against a parent all read from
+them — so writing them correctly and consistently matters more than
+which framework produced the numbers.
 
-It must include:
+### Library choice
+
+Each experiment's `code/pyproject.toml` pins:
+
+```toml
+dependencies = [
+  "python-exp",
+  "tensorboard>=2.17,<3",
+  "tensorboardX>=2.6.2",
+]
+```
+
+- `tensorboard` pins the on-disk event file format. This is what
+  `tb-query` and any shared analysis helpers read, so the writer and
+  reader need a consistent version.
+- `tensorboardX.SummaryWriter` is the default writer: framework-
+  agnostic (no hard torch dependency) and API-compatible with
+  `torch.utils.tensorboard.SummaryWriter`. Experiments that already
+  depend on torch may swap in `torch.utils.tensorboard.SummaryWriter`
+  — the `add_scalar` / `add_histogram` / `add_text` surface is
+  identical.
+- Do not mix writer families (e.g. `tensorflow.summary` in one
+  sibling, `tensorboardX` in another) inside a family. Drift in dtype
+  handling, step indexing, and tag namespacing makes parent/child
+  comparisons quietly unreliable.
+
+### Writer setup
+
+The scaffolded `code/run_experiment.py` reads the log directory from
+`run_config.json` and opens a `SummaryWriter`:
+
+```python
+from tensorboardX import SummaryWriter
+
+def make_writer(config: dict) -> SummaryWriter:
+    logdir = (Path(__file__).parent / config["paths"]["tensorboard"]).resolve()
+    logdir.mkdir(parents=True, exist_ok=True)
+    tb_cfg = config.get("logging", {}).get("tensorboard", {})
+    return SummaryWriter(
+        logdir=str(logdir),
+        flush_secs=tb_cfg.get("flush_secs", 30),
+        max_queue=tb_cfg.get("max_queue", 100),
+    )
+```
+
+`config["paths"]["tensorboard"]` defaults to `../tensorboard`, which
+resolves to `<experiment>/tensorboard/` — exactly where
+`tb-query find "$EXP/tensorboard"` expects event files. Do not
+override this path per experiment; the directory name is part of the
+skill's contract with `tb-query` and with the expected experiment
+layout. If a run produces multiple event streams (e.g. train vs. eval),
+use subdirectories *under* `tensorboard/` (`tensorboard/train/`,
+`tensorboard/eval/`) rather than moving the root.
+
+### Tag naming
+
+Tag names across siblings are what make `tb-query query`-based
+parent/child diffs meaningful. A child that logs `training_loss` while
+its parent logged `train/loss` is not comparable without translation.
+
+Use the tag names declared under "Standard metric categories" verbatim
+(`train/loss`, `val/loss`, `grad_norm`, `activation_entropy/layer_4`,
+etc.). For per-layer or per-head metrics, use the `/` hierarchy
+(`grad_norm_by_layer/layer_0`, `head_selectivity/layer_4_head_3`) so
+`tb-query tags --filter grad_norm_by_layer` groups them cleanly.
+
+If a new tag is needed that is not already in "Standard metric
+categories", add it there (PR to the skill, not just to one
+experiment) so future siblings log it under the same name.
+
+### Flush cadence and polling
+
+`flush_secs=30` fits the default 3–4 minute polling cadence: scalars
+land on disk and become visible to `tb-query` within seconds of being
+logged, and the writer does not hold enough data in memory to lose
+meaningful state on a hard crash.
+
+If the experiment writes scalars at sub-second cadence, raise
+`max_queue` rather than lowering `flush_secs` — flushing too often
+fragments event files and slows `tb-query find` on long runs. Conversely,
+for very long background jobs where polling is infrequent, raising
+`flush_secs` to a few minutes is fine so long as crash recovery is not
+a concern.
+
+### Live dashboard (optional)
+
+For visual inspection during a run, start a local TensorBoard server
+against the experiment's log directory:
+
+```bash
+uv run --project experiments/families/<family>/<exp-id>-<slug>/code \
+    tensorboard --logdir experiments/families/<family>/<exp-id>-<slug>/tensorboard
+```
+
+The LLM should default to `tb-query` instead of the dashboard (see
+"Polling protocol") — but the dashboard is the right tool when a
+human is eyeballing training dynamics that are hard to summarize as
+scalars (loss landscape shape, histogram drift, image samples).
+
+### Chain of custody
+
+`tensorboard` and `tensorboardX` are Python dependencies of each
+experiment's `code/` and are therefore captured by `uv.lock` inside the
+experiment's vendored environment at launch time. Re-running a frozen
+experiment reinstalls the exact pinned versions, so the event files
+produced on re-run match the ones produced at launch. This is the
+reason the pins live in `code/pyproject.toml` rather than in
+`tools/python_exp/` — the writer is part of the measured system,
+whereas `tb-query` (a pure reader of already-written files) is not.
+
+---
+
+## Root operational ledger
+
+The file `experiments/experiments.md` is the project-level operational
+ledger — Layer 1 of the three-layer index model (see "Index layers"
+above). It is backward-looking and authoritative for the *state* of
+experiments. Forward-looking strategy (theories, config recommendations,
+proposed experiments) lives in `experiments/families/index.md` and
+`experiments/families/<family>/index.md`, not here.
+
+`experiments.md` must include:
 
 ### Experimental protocol
 
@@ -593,7 +1029,8 @@ The operating protocol for all experiments.
 
 ### Families
 
-A list of experiment families.
+A list of experiment families — names and one-line characterizations.
+The strategic state of each family lives in its own `index.md`.
 
 ### Active experiments
 
@@ -626,7 +1063,11 @@ A table with:
 
 ### Meta-hypotheses across families
 
-A running summary of reusable conclusions from the full experiment graph.
+A running summary of reusable conclusions from the full experiment
+graph. This overlaps with the cross-family index — treat this section
+as the curated, ledger-grade short list (findings strong enough to make
+planning decisions from), and let the cross-family index hold the
+working, forward-looking version.
 
 ---
 
@@ -796,15 +1237,21 @@ When the run is done or stopped:
 * generate hypotheses,
 * determine whether the original expectation was supported, weakened, or contradicted.
 
-### 10. Update the ledger
+### 10. Update the ledger and strategy indexes
 
-Update:
+Update all three index layers (see "Index layers" above):
 
-* the child experiment directory,
+* the child experiment directory (`results.md`, `hypotheses.md`),
 * the parent experiment if descendant notes are relevant,
-* the root `experiments.md`.
+* `experiments/experiments.md` — append the completed row, update best
+  checkpoints if applicable,
+* `experiments/families/<family>/index.md` — append the one-line
+  finding, update working theories, config recommendations, proposed
+  future experiments, and open questions,
+* `experiments/families/index.md` — only when the new result affects
+  cross-family theories or recommendations.
 
-Include:
+Include in `experiments.md`:
 
 * command run,
 * result summary,
@@ -821,6 +1268,11 @@ If the experiment produced a useful regime, mark its checkpoint as a strong futu
 ## Polling protocol
 
 Each experiment must define a polling cadence. Default: every 3 to 4 minutes unless a different cadence is more appropriate.
+
+Use `tb-query` (see "Tooling" above) to pull the metrics below directly
+from the experiment's TensorBoard event files rather than eyeballing a
+live dashboard — its JSON output is easier to diff against the parent's
+signals and easier for the LLM to reason about between polls.
 
 At each poll, inspect:
 
@@ -990,8 +1442,9 @@ Example:
 Concrete markdown templates for every required file live in `references/templates/` and are used by `scripts/new_experiment.py` and `scripts/init_project.py`:
 
 - `hyper-experiments.md` — project marker placed at the repo root
-- `experiments.md` — global research ledger at `<root>/experiments/`
-- `family-index.md` — per-family index
+- `experiments.md` — operational ledger at `<root>/experiments/`
+- `families-index.md` — cross-family strategy index at `<root>/experiments/families/index.md`
+- `family-index.md` — per-family strategy index at `<root>/experiments/families/<family>/index.md`
 - `experiment-index.md` — rendered to each experiment's `index.md`
 - `plan.md`, `run.md`, `results.md`, `hypotheses.md` — per-experiment files
 - `artifacts-agents.md` → `artifacts/AGENTS.md`
@@ -999,12 +1452,14 @@ Concrete markdown templates for every required file live in `references/template
 - `manifest.md` → `data/manifest.md`
 - `code-pyproject.toml` → `code/pyproject.toml`
 - `code-run-experiment.py` → `code/run_experiment.py`
+- `code-run-config.json` → `code/run_config.json` (with parent-aware inheritance; see below)
+- `code-check-regressions.py` → `code/check_regressions.py`
 - `tools-python-exp-pyproject.toml` → `tools/python_exp/pyproject.toml` (written by `init_project.py`)
 - `tools-python-exp-init.py` → `tools/python_exp/src/python_exp/__init__.py` (written by `init_project.py`)
 
 See the "Required files per experiment" section above for the content each scaffolded stub must grow into before launch.
 
-Supported `{{var}}` substitutions: `experiment_id`, `slug`, `title`, `family`, `status`, `created_at`, `research_question`, `parent_experiment`, `parent_checkpoint`, `parent_directory`, `ancestor_baseline`, `counterfactual_delta`, `invariants`, `command`, `project_name`, `description`.
+Supported `{{var}}` substitutions: `experiment_id`, `slug`, `title`, `family`, `status`, `created_at`, `research_question`, `parent_experiment`, `parent_checkpoint`, `parent_directory`, `ancestor_baseline`, `counterfactual_delta`, `invariants`, `command`, `branched_from`, `branched_at`, `branch_copied_files`, `project_name`, `description`.
 
 Not every template uses every variable; templates not touched by a given
 variable pass it through untouched.
