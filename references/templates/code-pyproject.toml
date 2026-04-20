@@ -7,13 +7,18 @@ name = "{{experiment_id}}-{{slug}}"
 version = "0.1.0"
 description = "{{title}}"
 requires-python = ">=3.10"
-dependencies = ["python-exp"]
+dependencies = [
+  "python-exp",
+  "tensorboard>=2.17,<3",
+  "tensorboardX>=2.6.2",
+]
 
 [project.scripts]
 run-experiment = "run_experiment:main"
+check-regressions = "check_regressions:main"
 
 [tool.setuptools]
-py-modules = ["run_experiment"]
+py-modules = ["run_experiment", "check_regressions"]
 
 [tool.uv.sources]
 python-exp = { path = "../../../../../tools/python_exp", editable = true }
@@ -41,3 +46,11 @@ python-exp = { path = "../../../../../tools/python_exp", editable = true }
 #
 # Keep this file versioned with the code snapshot. If the counterfactual
 # delta includes a dependency change, that change must be visible here.
+#
+# TENSORBOARD: `tensorboard` pins the event file format that `tb-query`
+# and any shared analysis helpers read; `tensorboardX` provides the
+# framework-agnostic `SummaryWriter` used by `run_experiment.py`. If this
+# experiment already depends on torch, `torch.utils.tensorboard` is an
+# API-compatible alternative to `tensorboardX` — but pick one and stick
+# with it within a family so sibling event files stay comparable. See
+# SKILL.md > "TensorBoard logging".

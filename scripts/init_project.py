@@ -58,6 +58,12 @@ def main() -> int:
     if not ledger.exists() or args.force:
         ledger.write_text(render_template(load_template("experiments.md"), vars_))
 
+    families_index = root / "experiments" / "families" / "index.md"
+    if not families_index.exists() or args.force:
+        families_index.write_text(
+            render_template(load_template("families-index.md"), vars_)
+        )
+
     tools_pyproject = python_exp / "pyproject.toml"
     if not tools_pyproject.exists() or args.force:
         tools_pyproject.write_text(
@@ -73,6 +79,7 @@ def main() -> int:
     print(f"  - {ROOT_MARKER}")
     print(f"  - experiments/experiments.md")
     print(f"  - experiments/families/")
+    print(f"  - experiments/families/index.md (cross-family strategy)")
     print(f"  - tools/")
     print(f"  - tools/python_exp/ (shared library, importable as `python_exp`)")
     print()

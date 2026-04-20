@@ -11,6 +11,16 @@
 - Parent directory: {{parent_directory}}
 - Ancestor baseline: {{ancestor_baseline}}
 
+## Branch provenance
+<!-- Populated by scripts/branch_experiment.py when this experiment was
+     deep-copied from another. `null` means this experiment was scaffolded
+     from templates rather than branched. The branched-from id may equal
+     `parent_experiment` (normal case) or differ (rare: branched from a
+     sibling for code convenience, but conceptual parent is elsewhere). -->
+- Branched from: {{branched_from}}
+- Branched at: {{branched_at}}
+- Files copied from source: {{branch_copied_files}}
+
 ## Intent
 {{research_question}}
 
@@ -40,7 +50,10 @@
 - TODO
 
 ## Artifacts
-- code/
+- code/ — standalone uv project; run with `uv run run-experiment`
+- code/run_experiment.py — entry point
+- code/run_config.json — machine-readable run configuration (inherited from parent)
+- code/check_regressions.py — per-experiment regression check (contract assertions against `python_exp`)
 - tensorboard/
 - checkpoints/
 - logs/
