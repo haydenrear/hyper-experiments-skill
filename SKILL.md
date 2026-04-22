@@ -179,6 +179,42 @@ Exit code is 0 only if every experiment passes. Run this after editing
 anything in `tools/python_exp/` and before updating a frozen
 experiment's vendoring.
 
+### `scripts/check_disk.py` — disk report + pre-launch gate
+
+Reports total / used / free on the filesystem hosting the project,
+per-experiment footprint (`checkpoints/`, `tensorboard/`,
+`data/generated/`), and tiered pruning candidates. Used both as an
+ad-hoc diagnostic and as a mandatory pre-launch gate:
+
+```bash
+# Diagnostic — show the report.
+python scripts/check_disk.py
+
+# Pre-launch gate — exit non-zero if less than N GiB free.
+python scripts/check_disk.py --needed-gb 50
+```
+
+Pruning candidates are emitted in three tiers ordered by safety:
+
+1. **Tier 1 — safe.** `planned` experiments with stray
+   `checkpoints/`, `tensorboard/`, or `data/generated/` content (the
+   experiment has not launched, so its on-disk state is not yet frozen).
+2. **Tier 2 — safe if cold-archived.** `archived` experiments'
+   checkpoints. These can be moved to cold storage (not deleted)
+   without breaking chain of custody, *provided* the move is documented
+   in the experiment's `run.md` under a `Cold Storage` block so the
+   next operator knows where the checkpoint tree lives.
+3. **Tier 3 — requires waiver.** `running` / `stopped` / `completed`
+   experiments. Pruning their checkpoints violates chain-of-custody
+   Rule 4 ("existing checkpoints are immutable") and must be an
+   explicit, documented deviation — never a silent cleanup.
+
+The script **never deletes anything**: it prints paths and the commands
+the operator would run. Actual deletion or archival is a manual,
+operator-driven step, because the right call depends on cross-family
+context the script cannot see (e.g. whether the experiment appears in
+`experiments.md`'s "Best parent checkpoints" list).
+
 ### `tb-query` — query TensorBoard event files from the CLI
 
 `tb-query` (installed at `/usr/local/bin/tb-query`; source:
@@ -907,24 +943,25 @@ Each experiment's `code/pyproject.toml` pins:
 ```toml
 dependencies = [
   "python-exp",
+  "torch==2.11.0",
   "tensorboard>=2.17,<3",
-  "tensorboardX>=2.6.2",
 ]
 ```
 
 - `tensorboard` pins the on-disk event file format. This is what
   `tb-query` and any shared analysis helpers read, so the writer and
   reader need a consistent version.
-- `tensorboardX.SummaryWriter` is the default writer: framework-
-  agnostic (no hard torch dependency) and API-compatible with
-  `torch.utils.tensorboard.SummaryWriter`. Experiments that already
-  depend on torch may swap in `torch.utils.tensorboard.SummaryWriter`
-  — the `add_scalar` / `add_histogram` / `add_text` surface is
-  identical.
+- `torch.utils.tensorboard.SummaryWriter` is the default writer,
+  wired up in the scaffolded `run_experiment.py`. Its API
+  (`add_scalar` / `add_histogram` / `add_text`) is identical to
+  `tensorboardX.SummaryWriter`, so experiments that do not depend on
+  torch can swap `torch` for `tensorboardX>=2.6.2` in both the
+  dependency list and the import line without changing any call
+  sites.
 - Do not mix writer families (e.g. `tensorflow.summary` in one
-  sibling, `tensorboardX` in another) inside a family. Drift in dtype
-  handling, step indexing, and tag namespacing makes parent/child
-  comparisons quietly unreliable.
+  sibling, `torch.utils.tensorboard` in another) inside a family.
+  Drift in dtype handling, step indexing, and tag namespacing makes
+  parent/child comparisons quietly unreliable.
 
 ### Writer setup
 
@@ -932,7 +969,7 @@ The scaffolded `code/run_experiment.py` reads the log directory from
 `run_config.json` and opens a `SummaryWriter`:
 
 ```python
-from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 
 def make_writer(config: dict) -> SummaryWriter:
     logdir = (Path(__file__).parent / config["paths"]["tensorboard"]).resolve()
@@ -1133,6 +1170,209 @@ machine" is not a valid reason to skip the freeze.
 
 ---
 
+## Git discipline
+
+Chain of custody keeps the **contents of an experiment directory**
+stable over time. Git keeps the **history of the research tree as a
+whole** stable over time — ledger updates, family-index edits,
+cross-family theory revisions, shared-library evolution. They are
+complementary, and both are required: a project can have perfectly
+frozen experiments but no audit trail for the decisions that shaped
+them, or a pristine git log but mutating experiment directories. Neither
+alone is sufficient.
+
+### Mandatory commit points
+
+Every experiment requires at least **two commits**, one at launch and
+one at finish:
+
+#### 1. Pre-launch commit — "freeze committed"
+
+After the freeze procedure (step 6 of the standard workflow) and before
+the first `run-experiment` invocation:
+
+```bash
+git add experiments/families/<family>/<exp-id>-<slug>/
+git commit -m "[<exp-id>] freeze: scaffold + vendored tools"
+```
+
+This snapshot is the **reproducible-on-disk state** the launch is
+measured against. The commit SHA goes into `run.md`'s Launch block as
+`code snapshot`. If the experiment needs to be re-run six months later
+and chain of custody held, `git checkout <sha>` restores the exact tree
+that produced the original numbers.
+
+#### 2. Post-finish commit — "ledger + strategy updated"
+
+After step 11 (update ledger and strategy indexes):
+
+```bash
+git add experiments/experiments.md \
+        experiments/families/index.md \
+        experiments/families/<family>/index.md \
+        experiments/families/<family>/<exp-id>-<slug>/results.md \
+        experiments/families/<family>/<exp-id>-<slug>/hypotheses.md \
+        experiments/families/<family>/<exp-id>-<slug>/run.md
+git commit -m "[<exp-id>] complete: <one-line finding>"
+```
+
+This commit captures the write-back of findings into the research tree:
+the ledger row, the family theory update, the cross-family promotion (if
+any). Without it, a future reader can see the frozen experiment but not
+how the project's understanding moved because of it.
+
+### Optional intermediate commits
+
+Commit intermediate state when it is useful to preserve a particular
+moment in the experiment's history — for example:
+
+* after a mid-run poll decision to checkpoint-and-branch (so the
+  branching point is visible in `git log --all`),
+* after promoting a checkpoint to "best parent" in
+  `experiments.md`,
+* after a significant edit to `tools/python_exp/` that you want to
+  ship alongside the experiment that motivated it (commit the tooling
+  edit **separately** from the experiment's own commits — different
+  scope, different message).
+
+Intermediate commits are never a substitute for the two mandatory ones.
+
+### Commit message convention
+
+Prefix every experiment-scoped commit with the experiment id in
+brackets: `[exp-0042] ...`. This makes `git log --grep='\[exp-0042\]'`
+reproduce the full history of a single experiment in one line.
+
+Reserved verbs:
+
+* `scaffold` — created by `new_experiment.py` or `branch_experiment.py`,
+* `freeze` — vendored + ready to launch,
+* `poll N: <decision>` — a mid-run checkpoint,
+* `complete` — finished, ledger + strategy indexes updated,
+* `archive` — moved to archived status (late cleanup; uncommon).
+
+Cross-family or project-wide changes (shared library edits, new family
+bootstrap, ledger schema changes) carry their own scope prefix
+(`[tools]`, `[ledger]`, `[family:<name>]`) so they do not pollute the
+per-experiment log.
+
+### Relationship to chain of custody
+
+A git commit is **not** a substitute for vendoring. A frozen experiment
+must still be self-contained on disk: re-running it should not require
+re-reading the git log. But the commit history is what makes the
+evolution of the **project** — which ideas were tried, which worked,
+which were abandoned — legible months or years later, in a way that the
+per-experiment files alone cannot capture.
+
+### LLM rule
+
+When asked to launch an experiment, the LLM must also refuse to proceed
+unless the freeze commit has been made (or will be made as the final
+step before launch). When asked to finish an experiment, the LLM must
+include the post-finish commit as part of the close-out, not leave it
+for the operator to remember.
+
+---
+
+## Disk hygiene
+
+ML experiments are disk-expensive: checkpoints and TensorBoard event
+files accumulate quickly, and a launch that fails mid-training because
+the volume filled up is both a wasted run and an active chain-of-
+custody risk (a half-written checkpoint is worse than no checkpoint at
+all — the experiment cannot be re-run cleanly, and the missing late-
+stage state is not visible in the frozen artifact).
+
+Treat disk the way you treat git: check it on a rhythm, not only when
+it breaks.
+
+### Pre-launch disk check — mandatory
+
+Before every launch, run:
+
+```bash
+python scripts/check_disk.py --needed-gb <expected-footprint-plus-margin>
+```
+
+`<expected-footprint-plus-margin>` is the operator's honest estimate of
+how much the upcoming run will write to disk (checkpoints over the
+full training budget, TensorBoard scalars at the chosen flush cadence,
+any generated data the run will produce) plus a safety margin — at
+least 20% on top, more if the volume is shared with other users.
+
+The script exits non-zero if free space is below the stated need. The
+standard workflow (step 8) treats a non-zero exit as a hard refusal to
+launch: fix the disk situation first, then re-run the check.
+
+### What to prune — tiered by chain-of-custody risk
+
+When the pre-launch check fails, or as routine hygiene, prune by
+tier — always starting with the safest one. `check_disk.py` prints the
+candidates in each tier and the paths/commands to act on.
+
+**Tier 1 — safe.** `planned` experiments with stray content under
+`checkpoints/`, `tensorboard/`, or `data/generated/`. These are the
+remains of a smoke-run or an aborted draft; the experiment has not
+launched yet, so nothing in the tree is frozen. Deletion is safe and
+does not require any documentation.
+
+**Tier 2 — safe if cold-archived.** `archived` experiments'
+checkpoint trees. Archived experiments are unlikely to be branched
+from again, so moving their checkpoints to cold storage reclaims space
+without invalidating the historical measurement. But **move, do not
+delete**: cold storage means the bits still exist somewhere
+retrievable, and the move must be recorded in the experiment's
+`run.md` under a `Cold Storage` block naming the new location and the
+timestamp. Future operators must be able to rehydrate the checkpoint
+tree if a new interpretability tool demands it.
+
+**Tier 3 — requires chain-of-custody waiver.** `running`, `stopped`,
+or `completed` experiments' checkpoint trees. Pruning these violates
+chain-of-custody Rule 4 ("existing checkpoints are immutable").
+Acceptable only as an explicit, documented deviation: the operator
+adds a `Chain-of-custody deviation` block to `run.md` naming what was
+pruned, why, and what reproducibility the experiment loses as a
+consequence. Prefer branching a fresh experiment over pruning an old
+one.
+
+Do not prune Tier 3 silently. A checkpoint that disappears without a
+deviation record is indistinguishable from a corrupted or lost one,
+and the experiment's reproducibility story is permanently damaged.
+
+### What check_disk cannot see
+
+The script looks only at filesystem sizes and per-experiment `Status:`
+lines. It does **not** know which checkpoints appear in
+`experiments.md`'s "Best parent checkpoints" table, nor which are
+referenced by other experiments' `data/manifest.md` as frozen ancestor
+artifacts. Before acting on any Tier 2 or Tier 3 proposal, cross-check
+the candidate against:
+
+* `experiments/experiments.md` — Best parent checkpoints table,
+* every experiment's `data/manifest.md` — referenced frozen-ancestor
+  datasets and checkpoints.
+
+If the candidate appears in either, do not prune.
+
+### LLM rule
+
+When asked to launch an experiment, the LLM must:
+
+1. run `scripts/check_disk.py --needed-gb <estimate>` before the launch
+   command,
+2. refuse to proceed if the script exits non-zero,
+3. propose Tier 1 → Tier 2 → Tier 3 pruning candidates from the
+   script's output, in that order, with the chain-of-custody
+   implications stated for each,
+4. wait for the operator to act on the proposal before retrying the
+   disk check.
+
+The LLM must not delete or move anything itself without explicit
+operator approval for the specific path.
+
+---
+
 ## Standard workflow
 
 When asked to run an experiment, follow this workflow exactly.
@@ -1206,17 +1446,47 @@ depends on:
 
 Do not proceed to step 7 until the freeze block is filled in.
 
-### 7. Run the experiment
+### 7. Commit the frozen scaffold
 
-Launch the command and record:
+Before the first `run-experiment` invocation, commit the frozen
+experiment directory so the exact on-disk state that is about to be
+launched is captured in git:
+
+```bash
+git add experiments/families/<family>/<exp-id>-<slug>/
+git commit -m "[<exp-id>] freeze: scaffold + vendored tools"
+```
+
+Record the resulting commit SHA in `run.md`'s Launch block as
+`code snapshot`. See "Git discipline" above for the full policy.
+
+Do not proceed to step 8 until the freeze commit lands.
+
+### 8. Run the experiment
+
+First, the pre-launch disk gate (see "Disk hygiene" above):
+
+```bash
+python scripts/check_disk.py --needed-gb <expected-footprint-plus-margin>
+```
+
+If the script exits non-zero, do not launch. Prune Tier 1 / Tier 2
+candidates (and Tier 3 only with a documented waiver), then re-run the
+check. The LLM must refuse to proceed while the gate is red.
+
+Then launch the command and record:
 
 * timestamp,
 * host,
 * command,
-* git commit or code snapshot identity,
-* parent checkpoint used.
+* git commit or code snapshot identity (from the freeze commit in
+  step 7),
+* parent checkpoint used,
+* `check_disk.py` output at launch time — paste the "Free" line into
+  `run.md`'s Launch block so the starting disk state is part of the
+  audit trail.
 
-### 8. Poll the experiment
+### 9. Poll the experiment
 
 Poll on a fixed cadence.
 
@@ -1229,7 +1499,7 @@ At each poll:
 
 Record each poll in `run.md`.
 
-### 9. Finish the experiment
+### 10. Finish the experiment
 
 When the run is done or stopped:
 
@@ -1237,7 +1507,7 @@ When the run is done or stopped:
 * generate hypotheses,
 * determine whether the original expectation was supported, weakened, or contradicted.
 
-### 10. Update the ledger and strategy indexes
+### 11. Update the ledger and strategy indexes
 
 Update all three index layers (see "Index layers" above):
 
@@ -1259,9 +1529,31 @@ Include in `experiments.md`:
 * recommended next experiments,
 * pointer to experiment directory and TensorBoard log.
 
-### 11. Promote promising checkpoints
+### 12. Commit the results
 
-If the experiment produced a useful regime, mark its checkpoint as a strong future parent candidate.
+Close the experiment with a single commit that bundles the write-back
+into the research tree:
+
+```bash
+git add experiments/experiments.md \
+        experiments/families/index.md \
+        experiments/families/<family>/index.md \
+        experiments/families/<family>/<exp-id>-<slug>/results.md \
+        experiments/families/<family>/<exp-id>-<slug>/hypotheses.md \
+        experiments/families/<family>/<exp-id>-<slug>/run.md
+git commit -m "[<exp-id>] complete: <one-line finding>"
+```
+
+See "Git discipline" above. The LLM must not leave this commit for the
+operator to remember — it is part of finishing the experiment, not an
+optional cleanup.
+
+### 13. Promote promising checkpoints
+
+If the experiment produced a useful regime, mark its checkpoint as a
+strong future parent candidate. If this adds a row to
+`experiments.md`'s "Best parent checkpoints" table after step 12,
+commit that edit separately: `[<exp-id>] promote checkpoint`.
 
 ---
 

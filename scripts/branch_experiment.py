@@ -318,6 +318,17 @@ def main() -> int:
     print(f"  4. Complete {rel}/plan.md and {rel}/index.md (decision policy,")
     print(f"     key signals), then add a row to experiments/experiments.md")
     print(f"     and experiments/families/{family}/index.md.")
+    print()
+    print("Git discipline (see SKILL.md > 'Git discipline'):")
+    print(f"  * Commit the branched scaffold now so the branch point is in the log:")
+    print(f"      git add {rel}/")
+    print(f"      git commit -m \"[{exp_id}] scaffold: branched from {args.source}\"")
+    print(f"  * After the freeze procedure and before launch, make the")
+    print(f"    mandatory pre-launch commit:")
+    print(f"      git commit -m \"[{exp_id}] freeze: scaffold + vendored tools\"")
+    print(f"  * After the experiment finishes and the ledger / strategy indexes")
+    print(f"    are updated, make the mandatory post-finish commit:")
+    print(f"      git commit -m \"[{exp_id}] complete: <one-line finding>\"")
     return 0
 
 
