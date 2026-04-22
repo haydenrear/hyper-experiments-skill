@@ -9,8 +9,8 @@ description = "{{title}}"
 requires-python = ">=3.10"
 dependencies = [
   "python-exp",
-  "tensorboard>=2.17,<3",
-  "tensorboardX>=2.6.2",
+  "torch==2.11.0",
+  "tensorboard>=2.17,<3"
 ]
 
 [project.scripts]
@@ -48,9 +48,10 @@ python-exp = { path = "../../../../../tools/python_exp", editable = true }
 # delta includes a dependency change, that change must be visible here.
 #
 # TENSORBOARD: `tensorboard` pins the event file format that `tb-query`
-# and any shared analysis helpers read; `tensorboardX` provides the
-# framework-agnostic `SummaryWriter` used by `run_experiment.py`. If this
-# experiment already depends on torch, `torch.utils.tensorboard` is an
-# API-compatible alternative to `tensorboardX` — but pick one and stick
-# with it within a family so sibling event files stay comparable. See
-# SKILL.md > "TensorBoard logging".
+# and any shared analysis helpers read; `torch.utils.tensorboard`
+# provides the `SummaryWriter` used by `run_experiment.py`. Experiments
+# that do not want a torch dependency can swap `torch` for
+# `tensorboardX>=2.6.2` and change the import in `run_experiment.py` —
+# the writer API is identical. Pick one and stick with it within a
+# family so sibling event files stay comparable. See SKILL.md >
+# "TensorBoard logging".

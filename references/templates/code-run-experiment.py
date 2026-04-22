@@ -23,7 +23,7 @@ import json
 from pathlib import Path
 
 from python_exp import hello
-from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 
 CONFIG_PATH = Path(__file__).parent / "run_config.json"
 

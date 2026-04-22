@@ -233,6 +233,17 @@ def main() -> int:
     print(f"     under 'Experiments in this family' and note whether it tests")
     print(f"     an existing working theory or opens a new one")
     print(f"  5. Copy the relevant code snapshot into {rel}/code/")
+    print()
+    print("Git discipline (see SKILL.md > 'Git discipline'):")
+    print(f"  * Commit the scaffold now so the starting state is in the log:")
+    print(f"      git add {rel}/")
+    print(f"      git commit -m \"[{exp_id}] scaffold\"")
+    print(f"  * After the freeze procedure and before launch, make the")
+    print(f"    mandatory pre-launch commit:")
+    print(f"      git commit -m \"[{exp_id}] freeze: scaffold + vendored tools\"")
+    print(f"  * After the experiment finishes and the ledger / strategy indexes")
+    print(f"    are updated, make the mandatory post-finish commit:")
+    print(f"      git commit -m \"[{exp_id}] complete: <one-line finding>\"")
     return 0
 
 
