@@ -21,6 +21,97 @@ This skill is designed so an LLM can operate the experiment loop with minimal am
 
 ---
 
+## Installation & runtime dependencies
+
+This skill is **installable via skill-manager**, which handles both
+the CLI dependency (`tb-query`) and the MCP server dependency
+(`runpod`) declared in `skill-manager.toml`.
+
+### Recommended install
+
+```bash
+RUNPOD_API_KEY=<your-runpod-api-key> skill-manager install hyper-experiments
+```
+
+The `RUNPOD_API_KEY=...` prefix is what lets skill-manager auto-deploy
+the runpod MCP server at install time — see "Runpod MCP server" below
+for the mechanics. If you don't have a RunPod account or don't plan
+to use the runpod MCP tools, omit the prefix; the install still
+succeeds but runpod is registered without being deployed (you can
+deploy it later via `deploy_mcp_server` once a key is available).
+
+### `tb-query` CLI dependency
+
+`tb-query` is the polling-protocol default for inspecting TensorBoard
+event files (see "Polling protocol"). The skill declares it as a
+`pip:` CLI dep in `skill-manager.toml`, so on
+`skill-manager install hyper-experiments`:
+
+- skill-manager bundles `uv` under `$SKILL_MANAGER_HOME/pm/uv/` if
+  it isn't already there, then uses it to install `tb-query` into a
+  per-skill prefix.
+- The binary is symlinked to
+  `$SKILL_MANAGER_HOME/bin/cli/tb-query`. Add that directory to your
+  PATH or invoke `tb-query` by its absolute path — see
+  `<skill-manager-skill>/scripts/env.sh` for the recommended
+  PATH-conflict-free pattern.
+
+If you're not using skill-manager and want `tb-query` directly:
+
+```bash
+pip install 'tb-query>=2025.11'
+# or, with uv:
+uv tool install tb-query
+```
+
+### Runpod MCP server
+
+The `runpod` MCP server (`@runpod/mcp-server` from npm) ships every
+tool in the RunPod REST API as an MCP-callable tool —
+`runpod/list-endpoints`, `runpod/get-pod`, etc. See
+[`tools/mcp.md`](tools/mcp.md) for the full surface and call
+patterns.
+
+**Required environment variable**: `RUNPOD_API_KEY`. Get one from
+https://www.runpod.io/console/user/settings.
+
+**How the key reaches the subprocess** — install-time env-init:
+
+1. The skill manifest declares `RUNPOD_API_KEY` as a required+secret
+   field in `[[mcp_dependencies]].init_schema`. The actual value is
+   never committed.
+2. `skill-manager install` scans each MCP dep's `init_schema` against
+   the install process's environment. When `RUNPOD_API_KEY` is
+   present, it folds into the registration's
+   `initialization_params` and counts toward the auto-deploy
+   decision.
+3. The gateway's `_materialize_client_config` injects values that
+   match `init_schema` field names into the spawned subprocess's
+   env. So `npx -y @runpod/mcp-server@latest` runs with
+   `RUNPOD_API_KEY` set, even though the gateway process itself
+   doesn't carry the value.
+
+Practical consequence: prefix the install command with the key
+(`RUNPOD_API_KEY=... skill-manager install hyper-experiments`) and
+runpod auto-deploys. No follow-up `deploy_mcp_server` call needed.
+
+If runpod is registered but not yet deployed (key wasn't set at
+install time, or you want to point the same install at a different
+account), call `deploy_mcp_server` via the virtual MCP gateway with
+`initialization={"RUNPOD_API_KEY": "..."}`.
+
+### The virtual MCP gateway (what agents see)
+
+Agents installed under this skill don't see runpod directly —
+skill-manager fronts every downstream MCP server behind a single
+**virtual MCP gateway** entry. Discovery and invocation go through
+the gateway's virtual tools (`browse_mcp_servers`,
+`browse_active_tools`, `describe_tool`, `invoke_tool`, …). See
+[`tools/mcp.md`](tools/mcp.md) for the full agent-facing call
+pattern.
+
+---
+
 ## Tooling
 
 Two scaffolding scripts ship with this skill.
@@ -217,12 +308,26 @@ context the script cannot see (e.g. whether the experiment appears in
 
 ### `tb-query` — query TensorBoard event files from the CLI
 
-`tb-query` (installed at `/usr/local/bin/tb-query`; source:
-https://github.com/Alir3z4/tb-query) is the default lens for inspecting
-an experiment's TensorBoard event files during polling and post-run
-analysis. It emits JSON, so its output is consumable both by humans and
-by the LLM operating the experiment loop — prefer it over spinning up a
+`tb-query` (source: https://github.com/Alir3z4/tb-query, on PyPI as
+`tb-query`) is the default lens for inspecting an experiment's
+TensorBoard event files during polling and post-run analysis. It
+emits JSON, so its output is consumable both by humans and by the
+LLM operating the experiment loop — prefer it over spinning up a
 full `tensorboard` server when a single numeric answer will do.
+
+**Where it lives** depends on how you got the skill:
+
+- Installed via `skill-manager install hyper-experiments` →
+  `$SKILL_MANAGER_HOME/bin/cli/tb-query` (skill-manager bundles uv
+  and installs into a per-skill prefix; symlinks into `bin/cli/`).
+  Use `<skill-manager-skill>/scripts/env.sh --skills hyper-experiments`
+  for the absolute path that avoids PATH conflicts.
+- Installed directly with `pip install tb-query` or
+  `uv tool install tb-query` → wherever your Python tool dir puts
+  it (e.g. `/usr/local/bin/tb-query` or `~/.local/bin/tb-query`).
+
+See "Installation & runtime dependencies" near the top of this
+file for the full skill-manager install story.
 
 Subcommands (run `tb-query <cmd> --help` for the authoritative flags):
 
