@@ -1,0 +1,56 @@
+# skill-manager metadata for hyper-experiments. Invisible to the agent runtime;
+# tooling-only. See SKILL.md for the agent-facing documentation.
+
+# Transitive skill deps. Prefixes:
+#   skill:<name>[@<version>]  registry lookup
+#   file:<path>               sub-skill bundled in this directory
+skill_references = []
+
+# CLI tools the skill needs on PATH. `spec` selects the installer backend:
+#   pip:<pkg>[==ver]   platform-independent (bundled uv)
+#   npm:<pkg>[@ver]    platform-independent (bundled node/npm)
+#   brew:<pkg>         macOS/Linux (Homebrew; symlinked into bin/cli)
+#   tar:<name>         download+extract using `[cli_dependencies.install.<platform>]`
+
+# tb-query — CLI for reading TensorBoard event files. The skill's polling
+# protocol (SKILL.md > "Polling protocol") defaults to tb-query for between-poll
+# inspection of scalars; tooling and analysis helpers also assume tb-query is
+# on PATH. Project source: https://github.com/Alir3z4/tb-query
+[[cli_dependencies]]
+spec = "pip:tb-query"
+on_path = "tb-query"
+
+# MCP servers the skill registers via the gateway. skill-manager wires each
+# entry into the virtual MCP gateway at install time; agents only ever see
+# the gateway endpoint, never the raw downstream server.
+#
+# default_scope — how agents deploy this server. One of:
+#   session        — fresh deployment per agent session; init values ephemeral
+#   global         — shared across sessions; last init sticks for process lifetime
+#   global-sticky  — shared across sessions; last init persists to disk and is
+#                    auto-redeployed when the gateway restarts (default)
+
+# runpod-mcp — manage RunPod GPU pods, serverless endpoints, and storage.
+# Distributed on npm as `@runpod/mcp-server`. The gateway runs it via the
+# `npm` load type, which spawns `npx -y @runpod/mcp-server@latest` using
+# skill-manager's bundled Node ($SKILL_MANAGER_HOME/pm/node/current/bin/npx)
+# — installed automatically when this skill is added.
+#
+# RUNPOD_API_KEY: the load.env entry below leaves the value blank to mean
+# "passthrough from the gateway's environment". Operators export
+# `RUNPOD_API_KEY` in the shell that starts `skill-manager gateway up`; the
+# gateway propagates it into the spawned process at deploy time.
+[[mcp_dependencies]]
+name = "runpod"
+display_name = "RunPod"
+description = "Manage RunPod GPU pods, serverless endpoints, and storage."
+default_scope = "global-sticky"
+load = { type = "npm", package = "@runpod/mcp-server", version = "latest", env = { RUNPOD_API_KEY = "" } }
+init_schema = [
+    { name = "RUNPOD_API_KEY", type = "string", required = true, secret = true, description = "RunPod API key from https://www.runpod.io/console/user/settings. Export in the gateway's environment before deploying this server." },
+]
+
+# skill-wide metadata (kept last because [skill] steals any trailing keys)
+[skill]
+name = "hyper-experiments"
+version = "0.1.0"
