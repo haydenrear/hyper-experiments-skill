@@ -108,18 +108,18 @@ without ever being committed to disk.
 ## Local install verification
 
 After `RUNPOD_API_KEY=<key> skill-manager install hyper-experiments`
-returns, you can verify everything end-to-end without an agent:
+returns, verify end-to-end through the gateway's virtual tools — the
+same path agents use. Don't hit the gateway's HTTP surface directly;
+the virtual tools are the contract.
 
-```bash
-# Where is the gateway?
-skill-manager gateway status
+From an MCP-capable client (Claude Code, Codex, …):
 
-# Is runpod registered + deployed?
-curl -s http://127.0.0.1:<gateway-port>/servers/runpod | jq '{deployed, default_scope, load_type}'
-
-# What tools did it expose?
-# (Easiest from an MCP client; the gateway also has REST under /servers
-#  but tools are exposed only over MCP.)
+```text
+browse_mcp_servers()                              # runpod should be listed, deployed=true
+describe_mcp_server(server_id="runpod")           # confirm load_type=npm, default_scope=global-sticky
+browse_active_tools(server_id="runpod")           # list runpod/* tools
+describe_tool(tool_path="runpod/list-endpoints")  # disclosure gate
+invoke_tool(tool_path="runpod/list-endpoints", arguments={})
 ```
 
 The reference test that drives this end-to-end is the
