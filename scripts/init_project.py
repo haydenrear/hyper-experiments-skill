@@ -42,6 +42,7 @@ def main() -> int:
     root.mkdir(parents=True, exist_ok=True)
     (root / "experiments" / "families").mkdir(parents=True, exist_ok=True)
     (root / "tools").mkdir(parents=True, exist_ok=True)
+    (root / "scripts").mkdir(parents=True, exist_ok=True)
 
     python_exp = root / "tools" / "python_exp"
     (python_exp / "src" / "python_exp").mkdir(parents=True, exist_ok=True)
@@ -75,6 +76,16 @@ def main() -> int:
             render_template(load_template("tools-python-exp-init.py"), vars_)
         )
 
+    project_scripts = {
+        "scripts/new_experiment.py": "project-scripts-new-experiment.py",
+        "scripts/branch_experiment.py": "project-scripts-branch-experiment.py",
+    }
+    for out_name, tmpl_name in project_scripts.items():
+        out_path = root / out_name
+        if not out_path.exists() or args.force:
+            out_path.write_text(render_template(load_template(tmpl_name), vars_))
+            out_path.chmod(0o755)
+
     print(f"Initialized hyper-experiments project at {root}")
     print(f"  - {ROOT_MARKER}")
     print(f"  - experiments/experiments.md")
@@ -82,8 +93,15 @@ def main() -> int:
     print(f"  - experiments/families/index.md (cross-family strategy)")
     print(f"  - tools/")
     print(f"  - tools/python_exp/ (shared library, importable as `python_exp`)")
+    print(f"  - scripts/new_experiment.py    (project wrapper around the skill)")
+    print(f"  - scripts/branch_experiment.py (project wrapper around the skill)")
     print()
-    print("Next: create an experiment with scripts/new_experiment.py")
+    print("The two project scripts in scripts/ are thin wrappers that delegate")
+    print("to the installed hyper-experiments skill. Edit the marked '# add prep")
+    print("code (before)' / '# add templating code (after)' sections to layer in")
+    print("project-specific behavior.")
+    print()
+    print("Next: create an experiment with `python scripts/new_experiment.py`.")
     return 0
 
 

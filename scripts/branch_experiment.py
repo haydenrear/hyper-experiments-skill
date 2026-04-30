@@ -16,10 +16,13 @@ What is copied from the source:
 - `code/` tree verbatim (including `vendored/` if present),
 - `data/generation-scripts/`,
 - `data/manifest.md`,
-- `code/run_config.json` — merged through the template so that
-  name-bearing fields (experiment_id, slug, run_name, wandb run_name
-  and tags) are rewritten for the child, while every hyperparameter is
-  inherited verbatim.
+- `code/run_config.json` — copied verbatim from the source. Identity-
+  bearing string values (`experiment_id`, `slug`, `run_name`) are then
+  swept and rewritten for the child via `sweep_identity_in_json`. The
+  source's config is the source of truth for hyperparameters and
+  schema; we deliberately do NOT re-merge through a template, because
+  template-driven structural injection silently overrode parent
+  choices and caused real bugs.
 
 What is generated fresh (from templates, with the child's identity):
 - `index.md` with a Branch provenance block,
@@ -56,15 +59,15 @@ from _lib import (
     bullet_list,
     find_experiment_dir,
     find_experiments_root,
-    inherit_run_config,
     load_template,
+    parent_slug_from_dir,
     render_template,
     slugify,
+    sweep_identity_in_json,
     utcnow_iso,
 )
 
 
-RUN_CONFIG_TEMPLATE = "code-run-config.json"
 RUN_CONFIG_OUT = "code/run_config.json"
 
 EMPTY_SUBDIRS = ("logs", "tensorboard", "checkpoints")
@@ -93,6 +96,59 @@ def _copy_tree(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst)
 
 
+# Build artifacts that `shutil.copytree` pulls in alongside source files.
+# `__pycache__` and `*.egg-info` carry the parent's package name and stale
+# bytecode; `.venv` is a per-experiment virtualenv that must be rebuilt
+# against the child's pyproject. All are regenerated on first build of
+# the child and should never be inherited from the parent.
+#
+# Top-level entries to remove first (so subsequent recursive scans don't
+# descend into them — a venv contains thousands of __pycache__ dirs we
+# don't want to enumerate).
+_BUILD_CRUFT_TOP_LEVEL = (".venv",)
+_BUILD_CRUFT_TOP_LEVEL_GLOBS = ("*.egg-info",)
+# Recursive entries — scanned after top-level removals so they only find
+# the child experiment's own bytecode caches, not the venv's.
+_BUILD_CRUFT_RECURSIVE = ("__pycache__",)
+_BUILD_CRUFT_RECURSIVE_FILES = (".DS_Store",)
+
+
+def _purge_build_cruft(code_dir: Path, root: Path) -> list:
+    """Remove build artifacts copied from the source `code/` tree.
+
+    Returns the list of removed paths (relative to `root`) so the caller
+    can report them. Safe to call on a code_dir that doesn't exist (no-op).
+
+    Order matters: top-level removals run before recursive scans so that
+    e.g. a `.venv` containing thousands of nested `__pycache__` dirs is
+    deleted as a single tree rather than enumerated.
+    """
+    removed: list = []
+    if not code_dir.exists():
+        return removed
+    for name in _BUILD_CRUFT_TOP_LEVEL:
+        d = code_dir / name
+        if d.is_dir():
+            shutil.rmtree(d)
+            removed.append(d.relative_to(root))
+    for pattern in _BUILD_CRUFT_TOP_LEVEL_GLOBS:
+        for d in list(code_dir.glob(pattern)):
+            if d.is_dir():
+                shutil.rmtree(d)
+                removed.append(d.relative_to(root))
+    for name in _BUILD_CRUFT_RECURSIVE:
+        for d in list(code_dir.rglob(name)):
+            if d.is_dir():
+                shutil.rmtree(d)
+                removed.append(d.relative_to(root))
+    for name in _BUILD_CRUFT_RECURSIVE_FILES:
+        for f in list(code_dir.rglob(name)):
+            if f.is_file():
+                f.unlink()
+                removed.append(f.relative_to(root))
+    return removed
+
+
 def _copy_file(src: Path, dst: Path) -> None:
     if not src.exists():
         return
@@ -100,44 +156,61 @@ def _copy_file(src: Path, dst: Path) -> None:
     shutil.copy2(src, dst)
 
 
-def _rewrite_pyproject_name(pyproject_path: Path, new_name: str, new_description: str) -> None:
-    """Rewrite the `name` and `description` fields of the [project] table.
+def _rewrite_pyproject_name(
+    pyproject_path: Path,
+    *,
+    parent_exp_id: str,
+    parent_slug: str | None,
+    child_exp_id: str,
+    child_slug: str,
+    new_description: str | None,
+) -> None:
+    """Rewrite the `name` (and optionally `description`) of [project].
 
-    Minimal-surface edit: only the two identity-bearing lines are touched;
-    dependencies, tool.uv.sources, and comments stay byte-identical.
+    `name` retargeting preserves any project-specific suffix that follows
+    the parent identity prefix. For example, a parent named
+    `exp-0036-polynomial-grpo-overfit-shakedown-code` branched into
+    `exp-0037` with slug `polynomial-grpo-gate-init-fix` becomes
+    `exp-0037-polynomial-grpo-gate-init-fix-code` — the trailing `-code`
+    is preserved rather than dropped.
+
+    `description` is only rewritten when `new_description` is provided
+    (i.e., the user passed `--description`). Otherwise we leave the
+    inherited description alone — overwriting it with `--title` (which
+    is the slug source, not paragraph-prose) was the source of repeated
+    manual fixups.
     """
     if not pyproject_path.exists():
         return
     text = pyproject_path.read_text()
+
+    parent_prefix = (
+        f"{parent_exp_id}-{parent_slug}" if parent_slug else parent_exp_id
+    )
+    child_prefix = f"{child_exp_id}-{child_slug}"
+
+    def _replace_name(m):
+        old = m.group(2)
+        if parent_prefix and old.startswith(parent_prefix):
+            new = child_prefix + old[len(parent_prefix):]
+        else:
+            new = child_prefix
+        return f'{m.group(1)}"{new}"'
+
     text = re.sub(
-        r'(?m)^(name\s*=\s*)"[^"]*"',
-        lambda m: f'{m.group(1)}"{new_name}"',
+        r'(?m)^(name\s*=\s*)"([^"]*)"',
+        _replace_name,
         text,
         count=1,
     )
-    text = re.sub(
-        r'(?m)^(description\s*=\s*)"[^"]*"',
-        lambda m: f'{m.group(1)}"{new_description}"',
-        text,
-        count=1,
-    )
+    if new_description is not None:
+        text = re.sub(
+            r'(?m)^(description\s*=\s*)"[^"]*"',
+            lambda m: f'{m.group(1)}"{new_description}"',
+            text,
+            count=1,
+        )
     pyproject_path.write_text(text)
-
-
-def _rewrite_run_config_from_source(
-    *,
-    exp_dir: Path,
-    source_config_path: Path,
-    child_vars: dict,
-):
-    """Re-merge the copied `run_config.json` through the template so every
-    name-bearing placeholder is rewritten for the child. Inherited
-    hyperparameters stay verbatim."""
-    template_obj = json.loads(load_template(RUN_CONFIG_TEMPLATE))
-    source_config = json.loads(source_config_path.read_text())
-    merged, renames = inherit_run_config(template_obj, source_config, child_vars)
-    (exp_dir / RUN_CONFIG_OUT).write_text(json.dumps(merged, indent=2) + "\n")
-    return renames
 
 
 def main() -> int:
@@ -167,6 +240,11 @@ def main() -> int:
                     help="Declared invariant. Repeatable.")
     ap.add_argument("--command", default="",
                     help="Exact launch command. Defaults to TODO.")
+    ap.add_argument("--description", default=None,
+                    help="Description for code/pyproject.toml. If omitted, the "
+                         "parent's description is kept verbatim — pass this when "
+                         "the child needs a distinct one-line description (e.g. "
+                         "'exp-XXXX sibling: <delta>').")
     args = ap.parse_args()
 
     if args.experiments_root is not None:
@@ -218,6 +296,7 @@ def main() -> int:
 
     # 1. Deep-copy code/ (includes run_config.json, pyproject.toml, vendored/, etc.)
     _copy_tree(source_dir / "code", exp_dir / "code")
+    purged_cruft = _purge_build_cruft(exp_dir / "code", root)
 
     # 2. Copy data/generation-scripts/ and data/manifest.md; leave generated/ empty.
     (exp_dir / "data").mkdir()
@@ -261,22 +340,41 @@ def main() -> int:
         )
 
     # 5. Rewrite name-bearing slots in the copied code/pyproject.toml.
+    parent_slug = parent_slug_from_dir(source_dir.name)
     _rewrite_pyproject_name(
         exp_dir / "code" / "pyproject.toml",
-        new_name=f"{exp_id}-{slug}",
-        new_description=args.title,
+        parent_exp_id=args.source,
+        parent_slug=parent_slug,
+        child_exp_id=exp_id,
+        child_slug=slug,
+        new_description=args.description,
     )
 
-    # 6. Re-merge the copied run_config.json through the template so
-    #    placeholder slots get the child's identity.
+    # 6. Sweep every JSON file under code/ for identity-bearing keys
+    #    (experiment_id, slug, run_name). This includes run_config.json
+    #    itself: we deliberately do NOT re-merge it through a template.
+    #    The source's config is the source of truth for hyperparameters,
+    #    architecture, and any project-specific schema; injecting fields
+    #    from a generic template silently overrides the parent's choices
+    #    and was a real footgun (see commit history). Identity sweep
+    #    only changes name-bearing string values, never structural keys.
     source_config_path = source_dir / "code" / "run_config.json"
-    renames: list = []
-    if source_config_path.exists():
-        renames = _rewrite_run_config_from_source(
-            exp_dir=exp_dir,
-            source_config_path=source_config_path,
-            child_vars=vars_,
-        )
+    parent_identity = (args.source, parent_slug)
+    run_config_renames: list = []
+    extra_json_changes: dict = {}
+    code_dir = exp_dir / "code"
+    if code_dir.exists():
+        for json_path in sorted(code_dir.rglob("*.json")):
+            try:
+                changed = sweep_identity_in_json(json_path, vars_, parent_identity)
+            except json.JSONDecodeError:
+                continue
+            if not changed:
+                continue
+            if json_path == exp_dir / RUN_CONFIG_OUT:
+                run_config_renames = changed
+            else:
+                extra_json_changes[json_path.relative_to(exp_dir)] = changed
 
     rel = exp_dir.relative_to(root)
     print(f"Branched {args.source} -> {exp_id} at {rel}")
@@ -290,19 +388,34 @@ def main() -> int:
         print(f"  - {item}")
     print()
     if source_config_path.exists():
-        print(f"run_config.json: merged from {source_config_path.relative_to(root)}.")
-        if renames:
-            print("  Name-bearing fields updated for this experiment:")
-            for path, old, new in renames:
+        print(f"run_config.json: copied verbatim from {source_config_path.relative_to(root)}.")
+        if run_config_renames:
+            print("  Identity-bearing fields swept:")
+            for path, old, new in run_config_renames:
                 def _trim(v):
                     s = json.dumps(v, ensure_ascii=False)
                     return s if len(s) <= 60 else s[:57] + "..."
                 print(f"    - {path}: {_trim(old)} -> {_trim(new)}")
         else:
-            print("  (no name-bearing fields needed rewriting)")
-        print("  All other hyperparameters were inherited verbatim.")
+            print("  (no identity-bearing fields needed rewriting)")
+        print("  All hyperparameters inherited verbatim from source.")
     else:
-        print("run_config.json: source had none — none was created for this experiment.")
+        print("run_config.json: source had none — child has none either.")
+    if purged_cruft:
+        print()
+        print("Purged build artifacts copied from source code/ tree:")
+        for path in purged_cruft:
+            print(f"  - {path}")
+    if extra_json_changes:
+        print()
+        print("Identity rewritten in additional code/ JSON files:")
+        for path, changes in extra_json_changes.items():
+            print(f"  {path}:")
+            for dotted, old, new in changes:
+                def _trim(v):
+                    s = json.dumps(v, ensure_ascii=False)
+                    return s if len(s) <= 60 else s[:57] + "..."
+                print(f"    - {dotted}: {_trim(old)} -> {_trim(new)}")
     print()
     print("Reminders before launch:")
     print(f"  1. Update run_config.json for every hyperparameter listed in the")
