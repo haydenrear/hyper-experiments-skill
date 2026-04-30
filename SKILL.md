@@ -137,6 +137,30 @@ Creates:
 
 Run this once when starting a new hyper-experiments project. If the user says "set up a hyper-experiments project here", run this script.
 
+`init_project.py` also drops two project-local wrappers:
+
+- `<root>/scripts/new_experiment.py`
+- `<root>/scripts/branch_experiment.py`
+
+These are thin wrappers that locate the installed skill (via
+`$HYPER_EXPERIMENTS_SKILL_HOME` for a dev checkout, otherwise
+`$SKILL_MANAGER_HOME/skills/hyper-experiments`, defaulting to
+`~/.skill-manager/skills/hyper-experiments`) and delegate to its
+`scripts/new_experiment.py:main()` / `scripts/branch_experiment.py:main()`.
+Each wrapper has two marked sections in `main()`:
+
+- `# add prep code (before)` — runs before the skill script (validate
+  argv, seed defaults, mutate `sys.argv` to inject flags),
+- `# add templating code (after)` — runs after the skill script (render
+  extra files into the new experiment dir, append to project indexes,
+  fire notifications).
+
+Edit those sections in the project to layer in opinionated behavior; do
+not mirror the skill's logic in the wrappers. Throughout the rest of
+this document, when SKILL.md says "run `python scripts/new_experiment.py`"
+inside a hyper-experiments project, the wrapper is what's actually being
+invoked, and it forwards to the skill.
+
 ### `scripts/new_experiment.py` — create a child experiment
 
 Finds the project root (walks up from `cwd` looking for `hyper-experiments.md`, or use `--experiments-root`), allocates the next `exp-NNNN` id, and stamps out a fully scaffolded experiment directory from `references/templates/`.
@@ -1853,6 +1877,8 @@ Concrete markdown templates for every required file live in `references/template
 - `code-check-regressions.py` → `code/check_regressions.py`
 - `tools-python-exp-pyproject.toml` → `tools/python_exp/pyproject.toml` (written by `init_project.py`)
 - `tools-python-exp-init.py` → `tools/python_exp/src/python_exp/__init__.py` (written by `init_project.py`)
+- `project-scripts-new-experiment.py` → `<root>/scripts/new_experiment.py` (project-local wrapper, written by `init_project.py`)
+- `project-scripts-branch-experiment.py` → `<root>/scripts/branch_experiment.py` (project-local wrapper, written by `init_project.py`)
 
 See the "Required files per experiment" section above for the content each scaffolded stub must grow into before launch.
 
