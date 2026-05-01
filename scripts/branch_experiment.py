@@ -113,6 +113,25 @@ _BUILD_CRUFT_RECURSIVE = ("__pycache__",)
 _BUILD_CRUFT_RECURSIVE_FILES = (".DS_Store",)
 
 
+def _rmtree_with_retry(path: Path, max_attempts: int = 4) -> None:
+    """`shutil.rmtree` with retry — macOS occasionally fails with "directory
+    not empty" on deeply-nested venvs (torch in particular) when bulk-
+    deleting fast. The races resolve within a few hundred ms, so a small
+    retry loop is enough.
+    """
+    import time
+    last_err: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError as e:
+            last_err = e
+            time.sleep(0.2 * (attempt + 1))
+    if last_err is not None:
+        raise last_err
+
+
 def _purge_build_cruft(code_dir: Path, root: Path) -> list:
     """Remove build artifacts copied from the source `code/` tree.
 
@@ -129,17 +148,17 @@ def _purge_build_cruft(code_dir: Path, root: Path) -> list:
     for name in _BUILD_CRUFT_TOP_LEVEL:
         d = code_dir / name
         if d.is_dir():
-            shutil.rmtree(d)
+            _rmtree_with_retry(d)
             removed.append(d.relative_to(root))
     for pattern in _BUILD_CRUFT_TOP_LEVEL_GLOBS:
         for d in list(code_dir.glob(pattern)):
             if d.is_dir():
-                shutil.rmtree(d)
+                _rmtree_with_retry(d)
                 removed.append(d.relative_to(root))
     for name in _BUILD_CRUFT_RECURSIVE:
         for d in list(code_dir.rglob(name)):
             if d.is_dir():
-                shutil.rmtree(d)
+                _rmtree_with_retry(d)
                 removed.append(d.relative_to(root))
     for name in _BUILD_CRUFT_RECURSIVE_FILES:
         for f in list(code_dir.rglob(name)):
