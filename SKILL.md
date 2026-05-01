@@ -132,17 +132,21 @@ Creates:
 - `<root>/experiments/experiments.md` — the operational research ledger (backward-looking: active/completed runs, best checkpoints),
 - `<root>/experiments/families/` — populated by `new_experiment.py`,
 - `<root>/experiments/families/index.md` — cross-family planning index (forward-looking: theories, recommendations, and plans spanning multiple families; see "Index layers" below),
+- `<root>/experiments/baselines/` — cross-family baseline cache (see "Baselines" below),
+- `<root>/experiments/baselines/index.md` — append-only listing of cross-family baselines and what produced them,
 - `<root>/tools/` — shared cross-experiment tooling (see "Shared tools" below),
 - `<root>/tools/python_exp/` — a standalone Python package named `python-exp` (importable as `python_exp`) that every experiment depends on via an editable `[tool.uv.sources]` link.
 
 Run this once when starting a new hyper-experiments project. If the user says "set up a hyper-experiments project here", run this script.
 
-`init_project.py` also drops two project-local wrappers:
+`init_project.py` also drops three project-local scripts:
 
-- `<root>/scripts/new_experiment.py`
-- `<root>/scripts/branch_experiment.py`
+- `<root>/scripts/new_experiment.py` — wrapper around the skill's `new_experiment.py`,
+- `<root>/scripts/branch_experiment.py` — wrapper around the skill's `branch_experiment.py`,
+- `<root>/scripts/run_experiments.py` — self-contained project orchestrator with a
+  `run_baselines()` hook (see "Baselines" below).
 
-These are thin wrappers that locate the installed skill (via
+The two wrappers locate the installed skill (via
 `$HYPER_EXPERIMENTS_SKILL_HOME` for a dev checkout, otherwise
 `$SKILL_MANAGER_HOME/skills/hyper-experiments`, defaulting to
 `~/.skill-manager/skills/hyper-experiments`) and delegate to its
@@ -160,6 +164,12 @@ not mirror the skill's logic in the wrappers. Throughout the rest of
 this document, when SKILL.md says "run `python scripts/new_experiment.py`"
 inside a hyper-experiments project, the wrapper is what's actually being
 invoked, and it forwards to the skill.
+
+`run_experiments.py` is **not** a wrapper — it is a self-contained
+template the project edits in place. Its purpose is to host two hook
+functions, `run_baselines()` and `run_experiments()`, both of which
+are skip-by-default stubs. The skill does not own this file's logic;
+fill in the body to match how this project schedules runs.
 
 ### `scripts/new_experiment.py` — create a child experiment
 
@@ -186,7 +196,9 @@ Creates `experiments/families/<family>/<exp-NNNN>-<slug>/` containing:
 - `artifacts/` — `AGENTS.md` (agent instructions) + `memory.md` (cross-session scratch memory),
 - `data/` — `manifest.md` (dataset schema with references), `generation-scripts/`, `generated/`.
 
-Also creates `experiments/families/<family>/index.md` on first use of a new family.
+Also creates, on first use of a new family:
+- `experiments/families/<family>/index.md` — the family strategy index,
+- `experiments/families/<family>/baselines/index.md` — the family baseline cache (see "Baselines" below).
 
 The script enforces the lineage object model but does *not* fill in decision criteria, key signals, or the measurement plan — those require human judgment. After scaffolding, complete `plan.md` and `index.md`, then add a row to `experiments/experiments.md` under "Active experiments".
 
@@ -395,6 +407,8 @@ Concrete markdown templates used by both scripts live in `references/templates/`
 - `experiments.md` — root operational ledger
 - `families-index.md` — cross-family strategy index (rendered to `experiments/families/index.md`)
 - `family-index.md` — per-family strategy index (rendered to `experiments/families/<family>/index.md`)
+- `baselines-index.md` — cross-family baseline cache index (rendered to `experiments/baselines/index.md`)
+- `family-baselines-index.md` — per-family baseline cache index (rendered to `experiments/families/<family>/baselines/index.md`)
 - `experiment-index.md` — per-experiment `index.md`
 - `plan.md`, `run.md`, `results.md`, `hypotheses.md` — the required experiment files
 - `artifacts-agents.md`, `artifacts-memory.md` — rendered to `artifacts/AGENTS.md` and `artifacts/memory.md`
@@ -577,6 +591,10 @@ The experiment tree should be organized like this:
 
 ```text
 hyper-experiments.md
+scripts/
+  new_experiment.py
+  branch_experiment.py
+  run_experiments.py        # project orchestrator with run_baselines() hook
 tools/
   python_exp/
     pyproject.toml
@@ -585,10 +603,14 @@ tools/
         __init__.py
 experiments/
   experiments.md
+  baselines/                # cross-family baseline cache
+    index.md
   families/
     index.md
     <family_name>/
       index.md
+      baselines/            # per-family baseline cache
+        index.md
       <experiment_id>-<slug>/
         index.md
         plan.md
@@ -1030,6 +1052,93 @@ experiment's `code/`. For non-Python shared tooling, drop it under
 needed it. Moving a tool out of an experiment later breaks references in
 that experiment's `manifest.md` and `run.md`, and breaks `uv sync` for
 any experiment whose `[tool.uv.sources]` paths change.
+
+---
+
+## Baselines
+
+Baselines are reusable comparison points — a reference model's
+evaluation, a constant predictor's score, a vanilla fine-tune's loss
+curve, the metrics frozen out of an ancestor checkpoint. They are
+**expensive to compute and cheap to reuse**, so the project caches
+them once and references them many times.
+
+The single most important rule about baselines:
+
+> **A baseline that has already been computed should be reused, not
+> re-run.** Every `run_baselines()` hook in this skill defaults to
+> *skip* by design — leaving it as a no-op is the path of least
+> resistance, which keeps baseline regeneration deliberate and pushes
+> the project toward running as few baselines as possible.
+
+### Three scopes, with a promotion path
+
+Baselines live at three scopes, ordered by reuse priority:
+
+1. **Cross-family** — `<root>/experiments/baselines/`.
+   Created by `init_project.py`. Anything filed here is valid for
+   experiments in any family.
+2. **Per-family** — `<root>/experiments/families/<family>/baselines/`.
+   Created by `new_experiment.py` / `branch_experiment.py` the first
+   time a family is touched. Valid for any experiment in that family.
+3. **Per-experiment** — produced by an individual experiment's
+   `code/run_experiment.py` `run_baselines()` hook (see below). Lives
+   inside the experiment's own tree.
+
+A baseline is **promoted** as need rises: it starts inside an
+experiment, moves to its family's `baselines/` once a sibling needs
+it, and moves to `experiments/baselines/` once a second family needs
+it. A baseline is **demoted** out of a scope only when no remaining
+experiment at that scope references it.
+
+Each scope has an `index.md` whose contract is the same: append-only,
+one entry per baseline, every entry naming what it measures, what
+produced it (experiment id or external pipeline), the produced-at
+timestamp + commit SHA, the artifact paths, and which experiments use
+it.
+
+### `run_baselines()` hook — two layers
+
+Both runners — the project-wide `scripts/run_experiments.py` and each
+experiment's `code/run_experiment.py` — expose a `run_baselines()`
+function that defaults to skip:
+
+- **Project layer** (`<root>/scripts/run_experiments.py`,
+  `run_baselines(root)`) — produces *shared* baselines that multiple
+  experiments will compare against. Fill in to (re)compute a baseline
+  that does not already exist under `experiments/baselines/` or
+  `experiments/families/<family>/baselines/`.
+- **Experiment layer** (`<exp>/code/run_experiment.py`,
+  `run_baselines(config)`) — produces baselines specific to a single
+  experiment. Fill in only when the experiment genuinely needs a
+  baseline that does not yet exist at any scope.
+
+Both layers print a "skipped" message when not filled in. That message
+is the signal that everything downstream is reusing cached baselines —
+do not silence it without a reason.
+
+### Chain-of-custody
+
+A baseline's artifacts are immutable once any experiment references
+them. If the underlying computation needs to change, file a *new*
+baseline (with a distinct name) and supersede the old entry in the
+relevant `index.md` — never edit a baseline in place. This is the
+same principle as chain-of-custody for experiment checkpoints: a
+referenced artifact may be promoted or retired, but never silently
+mutated.
+
+### LLM rule
+
+Before adding a fresh baseline computation to any `run_baselines()`
+function, the LLM must:
+
+1. read the cross-family `experiments/baselines/index.md`,
+2. read the relevant family's `experiments/families/<family>/baselines/index.md`,
+3. only propose adding a new baseline if neither index already lists
+   one that satisfies the experiment's comparison need,
+4. when a new baseline is justified, propose it at the *highest*
+   scope a second consumer is plausible at — produce-once-reuse-many
+   beats produce-many-times.
 
 ---
 
@@ -1541,7 +1650,12 @@ Identify:
 * required metrics,
 * any new TensorBoard signals that must be added,
 * expected direction of movement,
-* what comparisons matter.
+* what comparisons matter,
+* which **baselines** the experiment will compare against — read
+  `experiments/baselines/index.md` and the family's
+  `experiments/families/<family>/baselines/index.md` first; reference
+  an existing baseline rather than producing a new one whenever
+  possible (see "Baselines" above).
 
 ### 5. Materialize the experiment
 
@@ -1866,19 +1980,22 @@ Concrete markdown templates for every required file live in `references/template
 - `experiments.md` — operational ledger at `<root>/experiments/`
 - `families-index.md` — cross-family strategy index at `<root>/experiments/families/index.md`
 - `family-index.md` — per-family strategy index at `<root>/experiments/families/<family>/index.md`
+- `baselines-index.md` — cross-family baselines index at `<root>/experiments/baselines/index.md` (written by `init_project.py`)
+- `family-baselines-index.md` — per-family baselines index at `<root>/experiments/families/<family>/baselines/index.md` (written by `new_experiment.py` / `branch_experiment.py` on first use of a family)
 - `experiment-index.md` — rendered to each experiment's `index.md`
 - `plan.md`, `run.md`, `results.md`, `hypotheses.md` — per-experiment files
 - `artifacts-agents.md` → `artifacts/AGENTS.md`
 - `artifacts-memory.md` → `artifacts/memory.md`
 - `manifest.md` → `data/manifest.md`
 - `code-pyproject.toml` → `code/pyproject.toml`
-- `code-run-experiment.py` → `code/run_experiment.py`
+- `code-run-experiment.py` → `code/run_experiment.py` (carries the per-experiment `run_baselines()` hook)
 - `code-run-config.json` → `code/run_config.json` (with parent-aware inheritance; see below)
 - `code-check-regressions.py` → `code/check_regressions.py`
 - `tools-python-exp-pyproject.toml` → `tools/python_exp/pyproject.toml` (written by `init_project.py`)
 - `tools-python-exp-init.py` → `tools/python_exp/src/python_exp/__init__.py` (written by `init_project.py`)
 - `project-scripts-new-experiment.py` → `<root>/scripts/new_experiment.py` (project-local wrapper, written by `init_project.py`)
 - `project-scripts-branch-experiment.py` → `<root>/scripts/branch_experiment.py` (project-local wrapper, written by `init_project.py`)
+- `project-scripts-run-experiments.py` → `<root>/scripts/run_experiments.py` (self-contained orchestrator with the project-level `run_baselines()` hook, written by `init_project.py`)
 
 See the "Required files per experiment" section above for the content each scaffolded stub must grow into before launch.
 

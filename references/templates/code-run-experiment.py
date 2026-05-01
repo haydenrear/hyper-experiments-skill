@@ -16,6 +16,10 @@ when one existed), opens a TensorBoard `SummaryWriter` pointed at
 as a sanity check. Replace `main()` with the actual experiment logic —
 keep the writer wired to `config["paths"]["tensorboard"]` so `tb-query`
 finds the event files at the expected location.
+
+`main()` calls `run_baselines()` before the experiment body. By default
+that is a no-op; see the function's docstring for when (and how) to
+fill it in.
 """
 from __future__ import annotations
 
@@ -44,10 +48,37 @@ def make_writer(config: dict) -> SummaryWriter:
     )
 
 
+def run_baselines(config: dict) -> None:
+    """Produce baselines specific to this experiment.
+
+    **Default: skip.** Most experiments should reuse baselines that are
+    already cached at a higher scope. In priority order, look for an
+    existing baseline at:
+
+      1. ``<root>/experiments/baselines/``                (cross-family)
+      2. ``<root>/experiments/families/{{family}}/baselines/``  (per-family)
+
+    Only fill this in when this experiment genuinely needs a baseline
+    that does not yet exist at any scope. If a baseline produced here
+    turns out to be useful to a sibling, promote it to the family's
+    ``baselines/``; if a second family needs it, promote it again to
+    the cross-family ``baselines/``.
+
+    The skip default is by design — leaving this as a no-op is the
+    path of least resistance, which keeps baseline regeneration
+    deliberate and pushes the project toward running as few baselines
+    as possible.
+    """
+    print("run_baselines: skipped (fill in to compute experiment-specific "
+          "baselines; reuse cached baselines whenever possible).")
+
+
 def main() -> int:
     config = load_config()
     print(f"Run config: {config['run_name']} (family={config['family']})")
     print(hello())
+
+    run_baselines(config)
 
     writer = make_writer(config)
     try:

@@ -307,6 +307,15 @@ def main() -> int:
             {"family": family, "created_at": utcnow_iso()},
         ))
 
+    family_baselines = family_dir / "baselines"
+    family_baselines.mkdir(exist_ok=True)
+    family_baselines_index = family_baselines / "index.md"
+    if not family_baselines_index.exists():
+        family_baselines_index.write_text(render_template(
+            load_template("family-baselines-index.md"),
+            {"family": family, "created_at": utcnow_iso()},
+        ))
+
     exp_dir = family_dir / f"{exp_id}-{slug}"
     if exp_dir.exists():
         print(f"error: {exp_dir} already exists", file=sys.stderr)

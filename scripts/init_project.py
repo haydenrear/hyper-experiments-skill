@@ -41,6 +41,7 @@ def main() -> int:
 
     root.mkdir(parents=True, exist_ok=True)
     (root / "experiments" / "families").mkdir(parents=True, exist_ok=True)
+    (root / "experiments" / "baselines").mkdir(parents=True, exist_ok=True)
     (root / "tools").mkdir(parents=True, exist_ok=True)
     (root / "scripts").mkdir(parents=True, exist_ok=True)
 
@@ -65,6 +66,12 @@ def main() -> int:
             render_template(load_template("families-index.md"), vars_)
         )
 
+    baselines_index = root / "experiments" / "baselines" / "index.md"
+    if not baselines_index.exists() or args.force:
+        baselines_index.write_text(
+            render_template(load_template("baselines-index.md"), vars_)
+        )
+
     tools_pyproject = python_exp / "pyproject.toml"
     if not tools_pyproject.exists() or args.force:
         tools_pyproject.write_text(
@@ -79,6 +86,7 @@ def main() -> int:
     project_scripts = {
         "scripts/new_experiment.py": "project-scripts-new-experiment.py",
         "scripts/branch_experiment.py": "project-scripts-branch-experiment.py",
+        "scripts/run_experiments.py": "project-scripts-run-experiments.py",
     }
     for out_name, tmpl_name in project_scripts.items():
         out_path = root / out_name
@@ -91,15 +99,23 @@ def main() -> int:
     print(f"  - experiments/experiments.md")
     print(f"  - experiments/families/")
     print(f"  - experiments/families/index.md (cross-family strategy)")
+    print(f"  - experiments/baselines/        (cross-family baseline cache)")
+    print(f"  - experiments/baselines/index.md")
     print(f"  - tools/")
     print(f"  - tools/python_exp/ (shared library, importable as `python_exp`)")
     print(f"  - scripts/new_experiment.py    (project wrapper around the skill)")
     print(f"  - scripts/branch_experiment.py (project wrapper around the skill)")
+    print(f"  - scripts/run_experiments.py   (project orchestrator with run_baselines() hook)")
     print()
-    print("The two project scripts in scripts/ are thin wrappers that delegate")
-    print("to the installed hyper-experiments skill. Edit the marked '# add prep")
-    print("code (before)' / '# add templating code (after)' sections to layer in")
-    print("project-specific behavior.")
+    print("new_experiment.py and branch_experiment.py are thin wrappers that")
+    print("delegate to the installed hyper-experiments skill. Edit the marked")
+    print("'# add prep code (before)' / '# add templating code (after)' sections")
+    print("to layer in project-specific behavior.")
+    print()
+    print("run_experiments.py is a self-contained orchestrator. Its run_baselines()")
+    print("function is intentionally a skip-by-default stub — fill it in only when")
+    print("a baseline is needed that is not already cached under experiments/baselines/")
+    print("or experiments/families/<family>/baselines/.")
     print()
     print("Next: create an experiment with `python scripts/new_experiment.py`.")
     return 0
