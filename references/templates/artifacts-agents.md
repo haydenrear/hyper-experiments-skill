@@ -14,6 +14,14 @@ experiment, poll it, evaluate it, propose children).
 - TODO — which logs / TensorBoard runs to inspect.
 
 ## Boundaries
+- Do **not** invoke `python` or `python3` directly inside this experiment —
+  always run entry points via `uv run <console-script>` (e.g.
+  `uv run run-experiment`, `uv run check-regressions`). Bare Python
+  bypasses `code/uv.lock`, ignores `[tool.uv.sources]`, and resolves
+  `python_exp` against whatever happens to be on `PYTHONPATH`, silently
+  breaking chain of custody. If `uv` is missing on the host, install
+  `uv` rather than falling back to `python`. See SKILL.md > "Running
+  an experiment > Why bare `python` is wrong".
 - Do **not** edit `index.md`'s Parent section after launch — lineage is frozen.
 - Do **not** overwrite `generated/` outputs without recording the regeneration
   in `run.md`.

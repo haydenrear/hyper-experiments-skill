@@ -1549,6 +1549,11 @@ widen identity.
 
 ## Running an experiment
 
+**Always use `uv`. Never invoke `python` (or `python3`) directly
+inside an experiment.** This is the single most common onboarding
+mistake — a new operator sees `code/run_experiment.py` and reaches
+for `python run_experiment.py`, which is wrong every time.
+
 From the hyper-experiments project root:
 
 ```bash
@@ -1563,10 +1568,79 @@ uv sync
 uv run run-experiment
 ```
 
-The experiment's pyproject declares an editable dependency on
-`tools/python_exp/` via `[tool.uv.sources]`, so `run-experiment` and any
-shared imports resolve to the currently-checked-out shared library
-without a separate install step.
+The experiment's pyproject declares an editable (or, post-freeze,
+vendored) dependency on `tools/python_exp/` via `[tool.uv.sources]`,
+so `run-experiment` and any shared imports resolve to the
+currently-checked-out shared library without a separate install
+step.
+
+### Why bare `python` is wrong
+
+`uv` is not a stylistic preference — it is what makes the experiment
+*the experiment we measured*. Bypassing it silently changes the
+measured system in ways that break chain of custody and produce
+unreproducible runs:
+
+* **Wrong interpreter.** `python` resolves to whatever is first on
+  `PATH` — system Python, conda, pyenv shim, the previous
+  experiment's leftover venv. `uv run` always uses the interpreter
+  pinned in `code/.python-version` / `pyproject.toml`'s
+  `requires-python`, so the run that lands on disk uses the version
+  the experiment was scaffolded against.
+* **Wrong dependency tree.** `python run_experiment.py` will resolve
+  imports against whatever happens to be installed in the current
+  shell, ignoring `code/uv.lock`. After freeze, the lockfile is part
+  of the chain of custody (Rule 5: the experiment must reproduce six
+  months later); a bare-Python invocation reads from the user's
+  ambient environment instead and the resulting numbers are not the
+  experiment's numbers.
+* **Wrong `python_exp` resolution.** `[tool.uv.sources]` is honored
+  only by `uv`. Bare `python` finds whatever `python_exp` happens to
+  be importable from `PYTHONPATH`, which silently mixes the current
+  `tools/python_exp/` (or, worse, an unrelated install of
+  `python-exp`) with the experiment's frozen state.
+* **No reproducible install step.** A future re-run by another
+  operator (or by the same operator six months later) starts with
+  `uv sync` to materialize the locked environment. There is no
+  equivalent for "the python I happened to have on PATH"; the run
+  is irreproducible by construction.
+
+If `uv` is missing on the host, **install `uv`**, do not fall back
+to `python`. Reproducing the experiment with the wrong tooling is
+strictly worse than not running it.
+
+### Console scripts, not file paths
+
+Always invoke entry points by their `[project.scripts]` console name
+(`run-experiment`, `check-regressions`), not by file path:
+
+```bash
+# Right
+uv run run-experiment
+uv run check-regressions
+
+# Wrong — both bypass the console-script wiring and may bypass uv:
+python code/run_experiment.py
+uv run python code/run_experiment.py
+```
+
+The console-script form is what the scaffolder wires up in
+`code/pyproject.toml`; running by file path skips the entry-point
+declaration and may silently miss setup that the entry point performs
+(argument parsing, logging configuration, the `__main__` guard).
+
+### LLM rule
+
+When asked to run, poll, or re-run an experiment, the LLM must:
+
+1. invoke commands as `uv run <console-script>` (or
+   `uv run --project <code-dir> <console-script>`) — never as
+   `python <file>` or `python3 <file>`,
+2. refuse to substitute bare Python even if `uv` reports a missing
+   environment — propose `uv sync` first,
+3. when an operator's transcript shows them about to invoke
+   `python run_experiment.py`, intercept and explain the failure
+   modes above before running anything.
 
 ---
 
@@ -2464,7 +2538,8 @@ When using this skill, the LLM must:
 6. always record poll-by-poll decisions,
 7. always write back results and hypotheses,
 8. always update the root ledger,
-9. before running anything non-trivial, confirm a minimum reproducible example exists at the bottom of the ladder, and propose building one if it does not (see "Isolation and the complexity ladder").
+9. before running anything non-trivial, confirm a minimum reproducible example exists at the bottom of the ladder, and propose building one if it does not (see "Isolation and the complexity ladder"),
+10. always invoke experiment entry points through `uv run <console-script>`; never `python <file>` or `python3 <file>` (see "Running an experiment > Why bare `python` is wrong" — bypassing `uv` silently breaks chain of custody and produces irreproducible runs).
 
 The LLM must not:
 
@@ -2472,7 +2547,8 @@ The LLM must not:
 * run experiments without a comparison target,
 * omit decision criteria,
 * omit lineage,
-* skip rungs of the complexity ladder when isolation is the right tool, or interpret a high-rung result while lower rungs are still red.
+* skip rungs of the complexity ladder when isolation is the right tool, or interpret a high-rung result while lower rungs are still red,
+* invoke `python` / `python3` directly inside an experiment, or run an entry point by file path instead of its console-script name.
 
 ---
 
