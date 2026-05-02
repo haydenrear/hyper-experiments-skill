@@ -52,3 +52,23 @@
 
 ## Comparison targets
 - TODO
+
+## Inherited config audit
+<!--
+Filled in after running new_experiment.py / branch_experiment.py.
+The scaffolder prints three audit blocks; record the decisions here
+so the next reader can see what was deliberate vs. inherited cruft.
+See SKILL.md > 'Inherited config audit' for the ritual.
+-->
+
+### Parent-identity references reviewed
+| path | original value | decision | rationale |
+|------|----------------|----------|-----------|
+| _e.g._ `logging.wandb.tags[1]` | `"exp-0001-lower-lr"` | rewritten | stale tag from parent |
+
+### Inherited verbatim — disposition
+| key | value | decision (keep/override/delete) | rationale |
+|-----|-------|----------------------------------|-----------|
+| _e.g._ `learning_rate` | `0.0003` | override -> `0.0001` | part of counterfactual delta |
+| _e.g._ `hyperparameters.warmup_steps` | `500` | keep | unchanged from parent regime |
+| _e.g._ `hyperparameters.legacy_flag_x` | `true` | delete | parent-only setting, no longer applies |

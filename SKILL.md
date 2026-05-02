@@ -447,6 +447,12 @@ Templates use `{{var}}` substitution. Edit them in place to customize the scaffo
    - Shared code, shared scripts, and external state must be vendored into the experiment before launch so that updates to `tools/` never silently invalidate a historical experiment.
    - See [`references/chain-of-custody.md`](references/chain-of-custody.md) for the full six-rule policy.
 
+8. **Isolate before you scale**
+   - When approaching anything non-trivial — a new mechanism, a suspected bug, an unfamiliar interaction — start from a **minimum reproducible example** where the behavior you care about can be verified or ruled out cheaply.
+   - From that anchor, climb a **complexity ladder**: each rung adds one piece of complexity toward the real target system.
+   - When a rung breaks, the failure is isolated to whatever that rung introduced — you do not have to debug the whole stack.
+   - See "Isolation and the complexity ladder" below.
+
 ---
 
 ## Definitions
@@ -582,6 +588,151 @@ Bad example:
 Good example:
 
 * "Branch from `exp-0007` at checkpoint `ckpt-step-12000`; lower learning rate from `3e-4` to `1e-4`; keep dataset, tokenizer, architecture, seed policy, and eval suite fixed; test whether post-structure-formation low LR preserves sparsity and improves validation stability."
+
+---
+
+## Isolation and the complexity ladder
+
+The single highest-leverage experimentation move is **isolation**: take
+something you believe works (or believe is broken) a particular way,
+strip it down to a minimum reproducible example where that behavior can
+be verified or ruled out cheaply, and only then start adding complexity
+back in. Without an anchor at the bottom of the stack, every failure at
+the top is ambiguous — you cannot tell whether the new variable broke
+the thing or whether the thing was already broken at the previous level.
+
+Most apparent dead-ends in this project are not "the idea didn't work."
+They are "we tried the idea inside a system big enough to hide several
+unrelated failures, and we cannot tell which one we are looking at."
+The complexity ladder is the discipline that prevents this.
+
+### The minimum reproducible example (rung 0)
+
+Rung 0 is the simplest possible experiment that still expresses the
+behavior under investigation. It is **not** a smaller version of the
+real run; it is a system small enough that the answer is unambiguous.
+
+Properties a good rung 0 has:
+
+* **Cheap.** A single rung-0 cycle (configure → run → observe →
+  decide) should fit inside a poll cadence — minutes, not hours. If
+  rung 0 takes a full training run to evaluate, it is too big.
+* **Local.** It exercises one mechanism, one data shape, one model
+  size, one optimizer, one signal. Everything not under test is set
+  to whatever value is least likely to interact with the question.
+* **Observable.** The signal that confirms or denies the behavior
+  must be readable directly — a printed scalar, a single
+  `tb-query stats` line, a unit test exit code. Don't gate rung 0
+  on derived metrics that themselves require a working stack.
+* **Anchored to a known truth.** Rung 0 verifies *something already
+  believed true* — a paper's reported result on a toy task, an
+  identity (e.g. zero loss on memorized data), a published
+  benchmark, or a reference implementation's output. This is what
+  makes it an *anchor*: if rung 0 disagrees with the known truth,
+  the framework around the experiment is wrong, not the hypothesis.
+
+The first finding from rung 0 is binary: "the anchor reproduces" or
+"the anchor does not reproduce." Until rung 0 reproduces, no higher
+rung is interpretable, and the right move is always to fix rung 0
+rather than push upward.
+
+### Climbing the ladder
+
+Once rung 0 is green, each subsequent rung introduces **one** piece
+of complexity from the gap between rung 0 and the real target system.
+Each rung is itself an experiment in this skill's sense: parent =
+the previous rung, counterfactual delta = the one piece newly added,
+invariants = everything inherited verbatim from the previous rung.
+
+Typical rung-to-rung deltas (project-dependent):
+
+* rung 0 → rung 1: switch from a synthetic toy dataset to a small
+  real-data slice, keeping the model and optimizer fixed,
+* rung 1 → rung 2: scale the model from "tiny" to "small," keeping
+  the data and optimizer fixed,
+* rung 2 → rung 3: introduce the optimizer / schedule used in the
+  real run, keeping data and model fixed,
+* rung 3 → rung N: add the remaining complexity (full data, full
+  model, full training budget) one element at a time.
+
+The ladder is **directional**, not exhaustive. Start at rung 0; only
+climb to rung N+1 when rung N has produced a clean, interpretable
+result. Skipping rungs is the failure mode — it reintroduces the
+ambiguity that motivated the ladder in the first place.
+
+### When a rung breaks
+
+If rung N reproduces and rung N+1 does not, the cause is — by
+construction — whatever was added between them. This is the entire
+payoff of the ladder, and it should be honored:
+
+* **Do not jump back to rung 0** to "rebuild from scratch." The
+  isolation already points at the offending delta; debug at rung
+  N+1, with rung N as the working reference.
+* **Do not climb further.** Higher rungs will only compound the
+  ambiguity. Stop, fix, and re-verify rung N+1 before continuing.
+* **Record the break in the rung's `results.md`** even if the
+  resolution is small: the value of the ladder is the audit trail
+  it leaves, not just the eventual green run.
+
+If rung N has been green for a long time and rung N+1 keeps failing
+in unrelated ways, suspect that rung N is silently wrong (the anchor
+has drifted) and re-verify rung N against its own anchor before
+debugging rung N+1 further.
+
+### Mapping the ladder to the experiment tree
+
+Each rung is a concrete experiment under
+`experiments/families/<family>/`. The ladder lives in the parent
+chain — rung 0 is the family's first experiment, rung 1's parent is
+rung 0, and so on. Use `branch_experiment.py` (not
+`new_experiment.py`) to create rung N+1 once rung N is launched and
+green: the new rung starts from rung N's exact code state, with the
+single counterfactual delta layered on top.
+
+The family's `index.md` is the right place to record the ladder
+itself — what each rung is supposed to verify, which rungs are
+green, where the ladder currently is. A family with a well-curated
+ladder section reads, at a glance, as a story of "here is what we
+have ruled in, here is what we have ruled out, here is the next
+thing we are isolating."
+
+### When *not* to climb a ladder
+
+The ladder is overhead. Skip it when:
+
+* the question is genuinely a tweak inside a regime that has
+  already been ladder-validated (a new LR value, a new seed) —
+  branch directly from the relevant checkpoint instead,
+* the change is mechanical and contained (rename, refactor, log a
+  new metric) — chain of custody and a single child experiment are
+  enough,
+* the cost of the full target run is itself within a poll cadence
+  — there is no rung 0 cheaper than the real thing, so the real
+  thing *is* rung 0.
+
+The ladder is for when you are crossing a gap of belief: "I think
+this mechanism does X" or "I think this bug is in subsystem Y." If
+you are not crossing such a gap, do not pay the ladder's cost.
+
+### LLM rule
+
+When a user describes a non-trivial experiment, a suspected
+mechanism, or an unfamiliar interaction, the LLM must:
+
+1. ask whether a rung 0 — a minimum reproducible example anchored
+   to a known truth — exists or has been built,
+2. if not, propose the rung 0 *before* proposing the target
+   experiment, and frame the target experiment as a rung-N
+   descendant of it,
+3. when planning the target, enumerate the intermediate rungs
+   (data, model size, optimizer, schedule, full budget) and call
+   out which ones the project has already validated and which are
+   open,
+4. if a result at a high rung is being interpreted, verify that
+   the rungs below it are themselves green — do not let an
+   ambiguous high-rung result drive a decision on top of an
+   un-verified stack.
 
 ---
 
@@ -884,18 +1035,44 @@ The inheritance algorithm is:
 5. Any keys present only in the template but not in the parent are
    added to the child with rendered values.
 
-The scaffolder prints a **rename report** after creating the child:
+The scaffolder prints a **rename report** after creating the child.
+Identity-bearing fields are auto-rewritten (the keys themselves —
+`experiment_id`, `slug`, `run_name`, `parent_experiment`,
+`parent_checkpoint`, plus any nested copy at e.g.
+`logging.wandb.run_name`). Parent-identity prefixes that appear in
+*values* under unexpected keys (a wandb tag, a comment string, a
+custom path) are detected by a regex sweep and surfaced for review,
+not auto-rewritten — a string like `"exp-0036-foo"` may be a stale
+identity leak or a deliberate reference, and only the operator can
+tell:
 
 ```
 run_config.json: inherited from experiments/families/.../code/run_config.json.
-  Name-bearing fields updated for this experiment:
-    - experiment_id: "exp-0001" -> "exp-0002"
-    - run_name: "exp-0001-lower-lr" -> "exp-0002-lr-drop"
-    - logging.wandb.run_name: "exp-0001-lower-lr" -> "exp-0002-lr-drop"
-  Remaining hyperparameters were inherited verbatim.
-  Before launch, cross-check every inherited value against this
-  experiment's counterfactual delta and update run_config.json for
-  anything that is part of the declared delta.
+
+  Identity-bearing fields auto-rewritten:
+    - experiment_id:                    "exp-0001"            -> "exp-0002"
+    - run_name:                         "exp-0001-lower-lr"   -> "exp-0002-lr-drop"
+    - logging.wandb.run_name:           "exp-0001-lower-lr"   -> "exp-0002-lr-drop"
+    - parent_experiment:                "exp-0000"            -> "exp-0001"
+    - parent_checkpoint:                ".../ckpt-step-8000"  -> ".../ckpt-step-12000"
+
+  Parent-identity references found (review and decide — not auto-rewritten):
+    - logging.wandb.tags[1]:            "exp-0001-lower-lr"
+        suggestion: rewrite to "exp-0002-lr-drop" (looks like a stale tag)
+    - hyperparameters.notes:            "based on exp-0001 ablation"
+        suggestion: keep (deliberate reference) or rewrite — operator decides
+
+  Inherited verbatim — audit each (keep | override | delete):
+    - learning_rate                     0.0003
+    - weight_decay                      0.1
+    - logging.tensorboard.flush_secs    30
+    - hyperparameters.warmup_steps      500
+    ...
+
+  Next: write your decisions into plan.md's '## Inherited config audit'
+  block before the freeze commit. Hyperparameters listed in the
+  counterfactual delta must be overridden in run_config.json now —
+  inherited values are the SOURCE's choices, not this experiment's.
 ```
 
 The report doubles as a prompt for the operator / LLM: it enumerates
@@ -917,6 +1094,80 @@ After launch, `run_config.json` is **frozen** together with everything
 else under `code/` (see chain-of-custody). If a follow-up experiment
 needs a different configuration, it should be a new child — not an
 edit to a launched experiment's config.
+
+#### Inherited config audit — the housekeeping ritual
+
+Inheritance is the right default — it keeps the parent's working
+hyperparameters in scope and makes the child's counterfactual delta
+the only thing the operator has to reason about. But it has a known
+failure mode: parent-specific cruft accumulates silently across
+generations, and the next agent who reads the config has to spelunk
+through every field to figure out which ones are load-bearing and
+which were inherited from a five-generations-ago ancestor for a reason
+no one remembers. **The config becomes a sink.**
+
+The fix is *attention, not auto-prune*. Neither `new_experiment.py`
+nor `branch_experiment.py` deletes inherited fields — deletion is too
+dangerous, because a "weird" inherited param often turns out to be
+load-bearing in a way the child's operator does not yet appreciate.
+Instead, the scaffolders surface three audit blocks in their prompt
+return, and the operator (or the LLM acting on their behalf) treats
+those blocks as **work to do before the freeze commit**, not
+informational noise:
+
+1. **Identity rewrites applied** — every name-bearing field the
+   script updated automatically (`experiment_id`, `slug`, `run_name`,
+   `parent_experiment`, `parent_checkpoint`, `logging.wandb.run_name`,
+   `logging.wandb.tags`, etc.). These are reported so nothing slips
+   past review, but no further action is required for them.
+2. **Parent-identity references found (review and decide)** — every
+   string value anywhere in the JSON tree that contains the parent's
+   `exp-NNNN[-slug]` prefix and was *not* auto-rewritten. Each entry
+   is a candidate leak: a wandb tag like `"exp-0036-foo"`, a comment
+   string, a path embedded in a custom hyperparameter. The operator
+   decides per entry whether it was a deliberate reference (e.g. a
+   pointer to the parent checkpoint — keep it) or a leaked identity
+   (rewrite to the child's, or remove).
+3. **Inherited verbatim — audit each (keep | override | delete)** —
+   every key the child took from the parent without any rewrite. The
+   operator decides per key:
+   - **keep** — the value still applies to this experiment,
+   - **override** — this hyperparameter is part of the counterfactual
+     delta and the new value goes in now,
+   - **delete** — the parent had this for a parent-specific reason
+     that does not apply here; remove the key so the config does not
+     carry forward dead weight.
+
+The audit is recorded inline in the child's `plan.md` under an
+`## Inherited config audit` block — a short table of `key → decision
+→ rationale`. The block is part of the experiment's frozen state, so
+six months later a reader can see not just what hyperparameters the
+experiment ran with, but which ones the operator *deliberately* kept
+versus inherited without thought.
+
+The freeze gate is what makes this stick: an experiment may not be
+launched until the audit block is filled in for every entry the
+scaffolder surfaced. Skipping the audit and committing a config full
+of unexamined parent cruft is a chain-of-custody failure for the same
+reason a missing freeze block is — the artifact no longer documents
+what was actually intended to be measured.
+
+##### LLM rule
+
+When the LLM runs `new_experiment.py` or `branch_experiment.py`, it
+must:
+
+1. read the audit blocks in the prompt return as a *task list*, not
+   informational output,
+2. for each "Parent-identity reference found", decide rewrite-or-keep
+   in conversation with the user (or autonomously when the call site
+   is unambiguous, e.g. a stale wandb tag),
+3. for each "Inherited verbatim" key, propose `keep | override |
+   delete` with a one-line rationale, and apply the decision to
+   `run_config.json` directly,
+4. write the resulting decisions into `plan.md`'s `## Inherited
+   config audit` block before proposing the freeze commit,
+5. refuse to proceed to launch while any audit entry is unresolved.
 
 ### `data/manifest.md`
 
@@ -1139,6 +1390,160 @@ function, the LLM must:
 4. when a new baseline is justified, propose it at the *highest*
    scope a second consumer is plausible at — produce-once-reuse-many
    beats produce-many-times.
+
+### Baseline cache — content-addressed lookup (design sketch)
+
+> Status: **design sketch, not yet implemented.** This subsection
+> describes the mechanism so a future implementation has a fixed
+> contract to land against, and so the LLM can reason about
+> baselines as cache-addressable artifacts rather than free-text
+> entries that may or may not already exist.
+
+The append-only `index.md` files described above are the audit
+trail; reading them is what an LLM must do today. But discipline
+alone fails across many prompts — an LLM working inside a single
+experiment's `run_baselines()` is exactly the place where "did we
+already compute this?" gets forgotten, and the baseline silently
+gets re-run. The cure is to make the question mechanical: hash the
+*identity inputs* of a baseline computation, look up the hash in
+known cache locations, and only fall through to computation on a
+miss.
+
+#### `baselines.config` — the input spec
+
+Each `run_baselines()` call site declares one or more
+`baselines.config` entries. A single entry has the shape:
+
+```jsonc
+{
+  "name": "vanilla-lm-1.3b-on-c4-128k-tokens",      // human-readable label
+  "produces": ["val_loss", "val_perplexity"],       // metrics this baseline yields
+  "inputs": {
+    "model_id":         "tiny-llama-1.3b",          // identity field
+    "model_revision":   "abc123",                   // identity field
+    "dataset_id":       "c4@v1.2",                  // identity field
+    "data_slice":       {"split": "validation",
+                         "max_samples": 128000},    // identity field
+    "seed_list":        [0, 1, 2],                  // identity field
+    "repeats":          3,                          // identity field
+    "eval_suite":       "lm_perplexity@v3",         // identity field
+    "vendored_code_sha":"<sha of frozen python_exp>", // identity field
+  },
+  "metadata": {                                     // NOT in the hash
+    "produced_at":      null,
+    "produced_by":      null,
+    "host":             null,
+    "walltime_seconds": null,
+    "notes":            ""
+  }
+}
+```
+
+The fields under `inputs` are the **identity fields** that
+participate in the hash. Fields under `metadata` are produced at
+compute time and never affect the cache key.
+
+The schema is intentionally minimal. A project that needs more
+identity fields (e.g. a tokenizer revision, a quantization mode)
+adds them under `inputs` *and* documents them in the project's
+`<root>/baselines.config.md` so the schema stays explicit.
+
+#### Hash protocol
+
+The cache key for an entry is:
+
+```
+key = sha256(canonical_json(entry["inputs"]))
+```
+
+`canonical_json` is JSON with sorted dict keys, no whitespace, and
+deterministic number formatting. The `name` field is *not* in the
+key — two entries with different names but identical inputs collide
+into the same cache entry, which is the correct behavior (one
+computation, multiple labels).
+
+Identity-vs-metadata is the load-bearing decision. Keep the
+identity set small enough that small editorial changes don't
+invalidate the cache (don't put `uv.lock` in identity), and large
+enough that two semantically different baselines never share a key
+(do put `vendored_code_sha` in identity, so a `python_exp` change
+that altered the eval invalidates the cache).
+
+When a project genuinely needs to widen the identity set (e.g. a
+new dimension of variability becomes meaningful), bump a
+`schema_version` field under `inputs` rather than retroactively
+extending the hash silently. Old cache entries with a different
+schema version simply won't match and will be recomputed at the new
+schema — no false hits.
+
+#### Lookup protocol
+
+Given a `baselines.config` entry with computed key `H`, the lookup
+walks scopes from broadest to narrowest (the same scope ordering
+already used by the human-readable indexes):
+
+1. `<root>/experiments/baselines/cache/<H>/`
+2. `<root>/experiments/families/<family>/baselines/cache/<H>/`
+3. `<exp>/data/baselines/cache/<H>/`
+
+The first hit wins. The cache directory contains:
+
+```
+<scope>/baselines/cache/<H>/
+  config.json     — the original entry (inputs + metadata, including produced-at)
+  metrics.json    — the produced scalars
+  artifacts/      — any larger artifact files this baseline emitted
+```
+
+A hit means the consumer references the cache entry from its
+`data/manifest.md` (project-root-relative path, the same convention
+as ancestor data references) — never copies. A miss falls through
+to computation.
+
+#### Store protocol
+
+When `run_baselines()` produces a fresh baseline:
+
+1. compute the metrics and artifacts,
+2. write `config.json` (with metadata populated), `metrics.json`,
+   and any artifact files into `<chosen-scope>/baselines/cache/<H>/`,
+3. append a one-line entry to that scope's `index.md` recording
+   the key `H`, the `name`, the produced-by experiment id, the
+   produced-at timestamp, the artifact paths, and the consumer
+   that triggered the compute.
+
+The chosen scope follows the same "highest scope a second consumer
+is plausible at" rule as the existing index-only flow.
+
+Once written, a cache entry is **immutable** (chain-of-custody Rule
+4). Recomputation under the same key is a programming error —
+either the implementation drifted or the inputs are not actually
+identifying. Tooling should refuse to overwrite an existing
+`<H>/` directory and print the existing entry's metadata so the
+operator can investigate the divergence.
+
+#### LLM rule (cache-aware)
+
+When the LLM is asked to run a baseline (project-layer or
+experiment-layer `run_baselines()`), it must:
+
+1. construct the `baselines.config` entry for the requested
+   computation,
+2. compute the cache key `H`,
+3. walk the three scopes in order; on a hit, write a reference
+   into the consumer's `data/manifest.md` and stop — do not
+   recompute,
+4. on a miss, surface the miss explicitly ("no cache entry for
+   <H> at any scope; will compute at <scope>") so the operator
+   can confirm the compute is intentional,
+5. on compute, write the artifact tree at `<chosen-scope>/cache/<H>/`
+   and append the corresponding `index.md` row.
+
+A cache hit must always be preferred over recomputation. The cost
+of a false miss (one extra compute) is finite; the cost of a false
+hit (silently consuming a stale baseline) is a chain-of-custody
+violation, which is why the schema-version bump is the only way to
+widen identity.
 
 ---
 
@@ -2058,14 +2463,16 @@ When using this skill, the LLM must:
 5. always specify the metrics to harvest,
 6. always record poll-by-poll decisions,
 7. always write back results and hypotheses,
-8. always update the root ledger.
+8. always update the root ledger,
+9. before running anything non-trivial, confirm a minimum reproducible example exists at the bottom of the ladder, and propose building one if it does not (see "Isolation and the complexity ladder").
 
 The LLM must not:
 
 * silently change multiple important variables without declaring them,
 * run experiments without a comparison target,
 * omit decision criteria,
-* omit lineage.
+* omit lineage,
+* skip rungs of the complexity ladder when isolation is the right tool, or interpret a high-rung result while lower rungs are still red.
 
 ---
 

@@ -177,10 +177,26 @@ def _rewrite_run_name(old, child_vars, parent):
     return new_prefix
 
 
+def _rewrite_parent_experiment(_old, child_vars, _parent):
+    return child_vars.get("parent_experiment", _old)
+
+
+def _rewrite_parent_checkpoint(_old, child_vars, _parent):
+    # `parent_checkpoint` defaults to the literal string "null" when no
+    # --checkpoint was passed. That is intentional: an inherited parent's
+    # parent_checkpoint is wrong for the child by definition, and "null"
+    # is the canonical "none specified" marker used elsewhere in the
+    # skill (index.md, plan.md). The operator overrides to a real path
+    # via the audit block when a checkpoint resume is meant.
+    return child_vars.get("parent_checkpoint", _old)
+
+
 _IDENTITY_REWRITES = {
     "experiment_id": _rewrite_exp_id,
     "slug": _rewrite_slug,
     "run_name": _rewrite_run_name,
+    "parent_experiment": _rewrite_parent_experiment,
+    "parent_checkpoint": _rewrite_parent_checkpoint,
 }
 
 
@@ -221,6 +237,102 @@ def sweep_identity_in_json(
     if changes:
         json_path.write_text(json.dumps(obj, indent=2) + "\n")
     return changes
+
+
+def _enumerate_leaf_paths(obj, prefix=""):
+    """Yield (dotted_path, value) for every leaf in a JSON tree."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield from _enumerate_leaf_paths(v, f"{prefix}.{k}" if prefix else k)
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            yield from _enumerate_leaf_paths(v, f"{prefix}[{i}]")
+    else:
+        yield prefix, obj
+
+
+def enumerate_inherited_leaves(json_path: Path, rewritten_paths):
+    """List every (dotted_path, value) leaf in `json_path` whose path is not
+    in `rewritten_paths`. This is the audit list of fields the child inherited
+    verbatim from the parent — the next agent must decide keep/override/delete
+    for each one (see SKILL.md > 'Inherited config audit')."""
+    obj = json.loads(json_path.read_text())
+    skip = set(rewritten_paths or ())
+    return [(p, v) for p, v in _enumerate_leaf_paths(obj) if p not in skip]
+
+
+def sweep_parent_identity_references(
+    json_path: Path,
+    parent_identity: tuple,
+    child_identity: tuple,
+    skip_paths=None,
+):
+    """Find string values containing the parent's identity prefix that were
+    not auto-rewritten. Returns (dotted_path, value, suggested_rewrite, kind)
+    tuples; does NOT modify the file.
+
+    `kind` is one of:
+      - "exact"  — value is exactly the parent prefix (e.g. "exp-0036-foo");
+                   suggested rewrite swaps in the child prefix.
+      - "embedded-with-slug"
+                 — value contains "exp-NNNN-slug" as a substring; rewrite
+                   swaps that occurrence only.
+      - "embedded-bare"
+                 — value contains "exp-NNNN" but not "-slug"; this is more
+                   likely a deliberate reference (parent checkpoint path,
+                   ancestor mention) than a leaked identity. Reported but
+                   suggested_rewrite is None — let the operator decide.
+
+    The caller is expected to surface every result for review; nothing here
+    is auto-applied. Identity rewrites at known keys are still handled by
+    `sweep_identity_in_json` — this sweep catches the rest.
+    """
+    parent_exp_id, parent_slug = parent_identity
+    child_exp_id, child_slug = child_identity
+    skip = set(skip_paths or ())
+
+    parent_prefix_with_slug = (
+        f"{parent_exp_id}-{parent_slug}" if parent_slug else None
+    )
+    child_prefix_with_slug = f"{child_exp_id}-{child_slug}"
+
+    # Match parent's "exp-NNNN-slug" first (more specific), fall back to
+    # bare "exp-NNNN" (the parent_exp_id literal). Anchored to word
+    # boundaries so we don't false-match inside another id.
+    bare_re = re.compile(rf"\b{re.escape(parent_exp_id)}\b")
+
+    obj = json.loads(json_path.read_text())
+    findings = []
+
+    def visit(node, path):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                visit(v, f"{path}.{k}" if path else k)
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                visit(v, f"{path}[{i}]")
+        elif isinstance(node, str):
+            if path in skip:
+                return
+            # Most specific first.
+            if parent_prefix_with_slug and parent_prefix_with_slug in node:
+                if node == parent_prefix_with_slug:
+                    findings.append((
+                        path, node, child_prefix_with_slug, "exact",
+                    ))
+                else:
+                    suggested = node.replace(
+                        parent_prefix_with_slug, child_prefix_with_slug,
+                    )
+                    findings.append((
+                        path, node, suggested, "embedded-with-slug",
+                    ))
+                return
+            if bare_re.search(node):
+                findings.append((path, node, None, "embedded-bare"))
+
+    visit(obj, "")
+    return findings
 
 
 def inherit_run_config(template_obj, parent_config, child_vars):
