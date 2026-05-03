@@ -106,6 +106,13 @@ def _copy_tree(src: Path, dst: Path) -> None:
 # against the child's pyproject. All are regenerated on first build of
 # the child and should never be inherited from the parent.
 #
+# `tensorboard/` and PyTorch-Lightning's `lightning_logs/` are run output
+# from the parent. They never belong inside `code/`, but if a previous
+# misconfiguration wrote them there they must not be carried into the
+# branched child — every child writes its own event stream into
+# `<exp>/tensorboard/`, and inheriting parent events silently merges two
+# runs in TensorBoard.
+#
 # Top-level entries to remove first (so subsequent recursive scans don't
 # descend into them — a venv contains thousands of __pycache__ dirs we
 # don't want to enumerate).
@@ -113,8 +120,9 @@ _BUILD_CRUFT_TOP_LEVEL = (".venv",)
 _BUILD_CRUFT_TOP_LEVEL_GLOBS = ("*.egg-info",)
 # Recursive entries — scanned after top-level removals so they only find
 # the child experiment's own bytecode caches, not the venv's.
-_BUILD_CRUFT_RECURSIVE = ("__pycache__",)
+_BUILD_CRUFT_RECURSIVE = ("__pycache__", "tensorboard", "lightning_logs")
 _BUILD_CRUFT_RECURSIVE_FILES = (".DS_Store",)
+_BUILD_CRUFT_RECURSIVE_FILE_GLOBS = ("events.out.tfevents.*",)
 
 
 def _rmtree_with_retry(path: Path, max_attempts: int = 4) -> None:
@@ -166,6 +174,11 @@ def _purge_build_cruft(code_dir: Path, root: Path) -> list:
                 removed.append(d.relative_to(root))
     for name in _BUILD_CRUFT_RECURSIVE_FILES:
         for f in list(code_dir.rglob(name)):
+            if f.is_file():
+                f.unlink()
+                removed.append(f.relative_to(root))
+    for pattern in _BUILD_CRUFT_RECURSIVE_FILE_GLOBS:
+        for f in list(code_dir.rglob(pattern)):
             if f.is_file():
                 f.unlink()
                 removed.append(f.relative_to(root))
