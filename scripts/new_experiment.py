@@ -35,9 +35,11 @@ from _lib import (
     find_experiments_root,
     inherit_run_config,
     load_template,
+    print_vendoring_provenance,
     render_template,
     slugify,
     utcnow_iso,
+    vendor_python_exp_from_tools,
 )
 
 
@@ -251,8 +253,23 @@ def main() -> int:
         exp_dir=exp_dir, root=root, parent_id=args.parent, child_vars=vars_,
     )
 
+    try:
+        vendor_prov = vendor_python_exp_from_tools(
+            root / "tools" / "python_exp",
+            exp_dir / "code",
+        )
+    except (FileNotFoundError, FileExistsError, ValueError) as e:
+        import shutil as _shutil
+        _shutil.rmtree(exp_dir, ignore_errors=True)
+        print(f"error: vendoring python_exp failed: {e}", file=sys.stderr)
+        print(f"       scaffolded experiment directory was rolled back.",
+              file=sys.stderr)
+        return 1
+
     rel = exp_dir.relative_to(root)
     print(f"Created {exp_id} at {rel}")
+    print()
+    print_vendoring_provenance(vendor_prov, source_kind="tools")
     print()
     _print_run_config_report(run_config_renames, args.parent)
     print()

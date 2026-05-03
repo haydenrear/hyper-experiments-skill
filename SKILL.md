@@ -135,7 +135,7 @@ Creates:
 - `<root>/experiments/baselines/` — cross-family baseline cache (see "Baselines" below),
 - `<root>/experiments/baselines/index.md` — append-only listing of cross-family baselines and what produced them,
 - `<root>/tools/` — shared cross-experiment tooling (see "Shared tools" below),
-- `<root>/tools/python_exp/` — a standalone Python package named `python-exp` (importable as `python_exp`) that every experiment depends on via an editable `[tool.uv.sources]` link.
+- `<root>/tools/python_exp/` — a standalone Python package named `python-exp` (importable as `python_exp`); `new_experiment.py` vendors a snapshot of this into each experiment's `code/vendored/python_exp/` at scaffold time, and `branch_experiment.py` inherits the parent's vendored snapshot. Experiments never depend on `tools/python_exp/` directly.
 
 Run this once when starting a new hyper-experiments project. If the user says "set up a hyper-experiments project here", run this script.
 
@@ -1127,21 +1127,27 @@ preferred tools/scripts, boundaries, and handoff notes. `memory.md` is the
 agent's cross-session scratch pad — facts, gotchas, and pointers that don't
 belong in the chronological `run.md` or the post-run `results.md`.
 
-### `code/` — standalone uv project linked to `python_exp`
+### `code/` — standalone uv project with vendored `python_exp`
 
 Each experiment's `code/` directory is its own **uv project** with a
 `pyproject.toml` whose project name is `<experiment_id>-<slug>`. It
-depends on `python-exp` (the shared library at `tools/python_exp/`)
-through `[tool.uv.sources]` as an editable install, using a path relative
-to `code/`:
+depends on `python-exp` resolved against this experiment's own frozen
+copy at `code/vendored/python_exp/`:
 
 ```toml
 [project]
 dependencies = ["python-exp"]
 
 [tool.uv.sources]
-python-exp = { path = "../../../../../tools/python_exp", editable = true }
+python-exp = { path = "./vendored/python_exp" }
 ```
+
+The vendored copy is populated at scaffold time (see "Chain of custody
+> Rule 2"): `new_experiment.py` copies from `tools/python_exp/`,
+`branch_experiment.py` inherits the parent's vendored copy via the
+deep-copy of `code/`. Experiments are self-contained from the moment
+they are created — there is no "still planning, editable link to
+shared tools" intermediate state.
 
 The scaffolder also writes `code/run_experiment.py` exposing a
 `run-experiment` console script wired up under `[project.scripts]`, so a
@@ -1153,9 +1159,11 @@ The purpose is reproducibility of individual experiments across time:
   `uv sync && uv run run-experiment` inside its `code/` must produce a
   working environment without pulling in newer dependency versions chosen
   by a sibling experiment,
-* shared library code lives in one place (`tools/python_exp/`) and every
-  experiment picks it up as an editable dependency — so improving a
-  shared helper does not require copy-edits across experiments,
+* shared library code lives in one place (`tools/python_exp/`) but is
+  shared *along the lineage chain* — siblings inherit the same
+  `python_exp` snapshot via their common branched parent, and updates
+  to `tools/python_exp/` benefit only future scaffolds (not past ones,
+  by design),
 * if the counterfactual delta includes a dependency change
   (library version bump, new dep), that change is visible in this
   `pyproject.toml` and is part of the declared delta.
@@ -1180,13 +1188,13 @@ It complements, rather than replaces, chain-of-custody vendoring:
   `tools/python_exp/`, or whether a recent shared-library change has
   broken an old experiment's expectations.
 
-When invoked locally (`uv run check-regressions`) it runs against
-whatever `python_exp` is installed in this experiment's venv
-(vendored if frozen, editable link if still planning). When invoked
-by the project-wide runner `scripts/check_regressions.py`, the current
-root `tools/python_exp/` is force-installed into the venv first, so the
+When invoked locally (`uv run check-regressions`) it runs against the
+`python_exp` vendored at this experiment's `code/vendored/python_exp/`
+— the snapshot taken at scaffold time. When invoked by the
+project-wide runner `scripts/check_regressions.py`, the current root
+`tools/python_exp/` is force-installed into the venv first, so the
 contract is evaluated against the current shared library regardless of
-freeze status.
+the experiment's vendored snapshot.
 
 Keep each experiment's `check_regressions.py` cheap to run (seconds,
 not minutes): the project-wide runner invokes every experiment's check
@@ -1440,11 +1448,14 @@ tools/python_exp/
       __init__.py
 ```
 
-Every experiment's `code/pyproject.toml` depends on `python-exp` via an
-editable `[tool.uv.sources]` path. Concretely: when an experiment runs
-`uv sync`, uv installs `tools/python_exp/` in editable mode into the
-experiment's virtual environment, so `import python_exp` resolves to the
-currently-checked-out shared code.
+Every experiment's `code/pyproject.toml` depends on `python-exp` via a
+`[tool.uv.sources]` path pointing at the experiment's own vendored
+copy (`./vendored/python_exp`). When an experiment runs `uv sync`, uv
+installs that vendored copy into the experiment's virtual environment,
+so `import python_exp` resolves to the snapshot taken at scaffold time
+— not whatever `tools/python_exp/` happens to be now. Edits to
+`tools/python_exp/` benefit only experiments scaffolded *after* the
+edit; existing experiments must be re-vendored to pick them up.
 
 Put shared functions here as soon as more than one experiment needs them.
 Prefer adding to `python_exp` over vendoring helpers into an individual
@@ -2027,18 +2038,18 @@ version:
    from only its own `code/`, `data/`, and `checkpoints/`, plus any
    frozen ancestor data it explicitly references.
 
-2. **Vendor shared code before launch.** Before marking the experiment
-   `running`, copy `tools/python_exp/` into
-   `<experiment>/code/vendored/python_exp/` and rewrite
-   `code/pyproject.toml`:
-
-   ```toml
-   [tool.uv.sources]
-   python-exp = { path = "./vendored/python_exp" }
-   ```
-
-   Drop the `editable = true` flag. Do the same for any other shared
-   tool (binary, jar, CLI) the experiment calls directly.
+2. **Vendor shared code at scaffold time.** `new_experiment.py` and
+   `branch_experiment.py` vendor `python_exp` automatically:
+   `new_experiment.py` copies from `tools/python_exp/`,
+   `branch_experiment.py` inherits the parent's vendored copy via the
+   deep-copy of `code/`. Both regex-rewrite `[tool.uv.sources]` to
+   point at `./vendored/python_exp` (no `editable = true`) and print a
+   "Vendoring provenance" block (source path + SHA, dest path,
+   pyproject line/old/new) so the operator can verify nothing
+   unrelated was touched. If vendoring fails, the half-scaffolded
+   experiment dir is rolled back. Other shared tools (binaries, jars,
+   CLIs) still need to be vendored manually before launch — auto-
+   vendoring covers `python_exp` only.
 
 3. **Vendor shared generation scripts.** If the manifest references a
    generation script owned by another experiment, copy it into this
@@ -2057,17 +2068,22 @@ version:
    because they vendored the old version.
 
 6. **Record the freeze.** Fill in the `Freeze` block in `run.md` at
-   launch time — what was vendored, when, what SHAs, any deviation from
-   the shared version. Without this block the chain of custody cannot be
-   audited.
+   launch time — what was vendored, when, what SHAs, any deviation
+   from the shared version. The values to record are the ones
+   `new_experiment.py` / `branch_experiment.py` already printed in
+   their "Vendoring provenance" block. Without this block the chain of
+   custody cannot be audited.
 
 ### LLM rule
 
 When asked to launch an experiment, the LLM must refuse to proceed until
-`code/vendored/` is populated, `[tool.uv.sources]` points inside the
-experiment, every manifest script reference is local, and the `Freeze`
-block in `run.md` has been filled in. "Editable link works on my
-machine" is not a valid reason to skip the freeze.
+`code/vendored/python_exp/` is populated, `[tool.uv.sources]` points
+inside the experiment (`./vendored/python_exp`, no `editable = true`),
+every manifest script reference is local, and the `Freeze` block in
+`run.md` has been filled in. For experiments scaffolded by the current
+tooling all four are true at scaffold time; for legacy experiments
+scaffolded under the manual-freeze workflow, run the recipe in
+`references/chain-of-custody.md` to repair.
 
 ---
 
@@ -2336,19 +2352,19 @@ The child `index.md` must point to its parent.
 
 ### 6. Freeze (chain of custody)
 
-Before launching, vendor every piece of shared state the experiment
-depends on:
+`python_exp` was vendored automatically by `new_experiment.py` /
+`branch_experiment.py` at scaffold time (see "Chain of custody >
+Rule 2"). What remains to do at launch:
 
-* copy `tools/python_exp/` into `<experiment>/code/vendored/python_exp/`
-  and rewrite `[tool.uv.sources]` in `code/pyproject.toml` to point at
-  `./vendored/python_exp` without `editable = true`,
 * copy any shared non-Python tool (binary, jar, CLI) the experiment
   will invoke into the experiment's own tree,
 * copy any generation script referenced from another experiment into
   `data/generation-scripts/` and rewrite `data/manifest.md`,
 * run `uv sync && uv run run-experiment` inside `code/` to confirm the
   frozen experiment is self-reproducible,
-* fill in the `Freeze` block in `run.md` (paths, SHAs, timestamp).
+* fill in the `Freeze` block in `run.md` (paths, SHAs, timestamp) —
+  the values for the `python_exp` rows are the ones the scaffolder
+  already printed in its "Vendoring provenance" block.
 
 Do not proceed to step 7 until the freeze block is filled in.
 

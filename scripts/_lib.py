@@ -4,6 +4,8 @@ from __future__ import annotations
 import copy
 import json
 import re
+import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -333,6 +335,200 @@ def sweep_parent_identity_references(
 
     visit(obj, "")
     return findings
+
+
+# --- python_exp vendoring ----------------------------------------------------
+#
+# Every experiment carries its own frozen copy of the shared `python_exp`
+# library at `code/vendored/python_exp/`. The two scaffolding scripts vendor
+# automatically:
+#   - new_experiment.py vendors from `<root>/tools/python_exp/`
+#   - branch_experiment.py inherits the parent's vendored copy (already
+#     deep-copied as part of `code/`); these helpers verify / repair the
+#     child's pyproject.toml so it still points at `./vendored/python_exp`.
+#
+# The match is scoped to the [tool.uv.sources] python-exp line; everything
+# else in pyproject.toml is left alone. Each helper returns a provenance
+# dict so the caller (and any LLM reading stdout) can verify the rewrite
+# touched exactly what was intended.
+
+PYTHON_EXP_SOURCE_RE = re.compile(
+    r'^(?P<line>python-exp\s*=\s*\{[^}\n]*\})\s*$',
+    re.MULTILINE,
+)
+VENDORED_PYTHON_EXP_LINE = 'python-exp = { path = "./vendored/python_exp" }'
+
+
+def _git_sha(path: Path):
+    """Best-effort `git rev-parse HEAD` for the dir's repo. Returns None if
+    not under git or git is unavailable."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() or None
+    except (FileNotFoundError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def _lineno(text: str, pos: int) -> int:
+    return text.count("\n", 0, pos) + 1
+
+
+def _rewrite_python_exp_source(pyproject: Path) -> dict:
+    """Rewrite the [tool.uv.sources] python-exp line to point at the local
+    vendored copy. Returns a dict describing the change. Raises if the
+    line is not found exactly once.
+    """
+    text = pyproject.read_text()
+    matches = list(PYTHON_EXP_SOURCE_RE.finditer(text))
+    if len(matches) != 1:
+        raise ValueError(
+            f"expected exactly one python-exp line in {pyproject}; "
+            f"found {len(matches)}. refusing to rewrite to avoid clobbering."
+        )
+    m = matches[0]
+    old_line = m.group("line")
+    new_line = VENDORED_PYTHON_EXP_LINE
+    line_no = _lineno(text, m.start())
+    if old_line == new_line:
+        return {
+            "file": str(pyproject),
+            "line_no": line_no,
+            "old": old_line,
+            "new": new_line,
+            "changed": False,
+        }
+    new_text = text[: m.start("line")] + new_line + text[m.end("line") :]
+    pyproject.write_text(new_text)
+    return {
+        "file": str(pyproject),
+        "line_no": line_no,
+        "old": old_line,
+        "new": new_line,
+        "changed": True,
+    }
+
+
+def vendor_python_exp_from_tools(
+    tools_python_exp: Path,
+    code_dir: Path,
+) -> dict:
+    """Vendor `tools_python_exp` into `code_dir/vendored/python_exp/` and
+    rewrite the experiment's pyproject.toml [tool.uv.sources] python-exp
+    line to point at the local copy (non-editable).
+
+    Returns a provenance dict so the caller can verify nothing was
+    clobbered:
+
+        {
+          "vendored_from": "<abs path>",
+          "vendored_from_sha": "<git sha or None>",
+          "vendored_to": "<abs path>",
+          "pyproject": {
+            "file": "<abs path>",
+            "line_no": <int>,
+            "old": "<original line>",
+            "new": "<rewritten line>",
+            "changed": True,
+          },
+        }
+    """
+    if not tools_python_exp.exists():
+        raise FileNotFoundError(
+            f"shared python_exp not found at {tools_python_exp}"
+        )
+    pyproject = code_dir / "pyproject.toml"
+    if not pyproject.exists():
+        raise FileNotFoundError(f"pyproject.toml not found at {pyproject}")
+
+    dest = code_dir / "vendored" / "python_exp"
+    if dest.exists():
+        raise FileExistsError(
+            f"refusing to overwrite existing {dest}; "
+            f"vendoring should run on a fresh scaffold"
+        )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(tools_python_exp, dest)
+
+    return {
+        "vendored_from": str(tools_python_exp),
+        "vendored_from_sha": _git_sha(tools_python_exp),
+        "vendored_to": str(dest),
+        "pyproject": _rewrite_python_exp_source(pyproject),
+    }
+
+
+def verify_or_fix_branched_python_exp(
+    parent_code_dir: Path,
+    child_code_dir: Path,
+) -> dict:
+    """Verify that branching produced a child whose vendored python_exp came
+    from the parent's vendored copy, and that the child's pyproject still
+    points at `./vendored/python_exp`. Repairs the pyproject line via
+    regex if it drifted (e.g. parent had an editable link).
+
+    Returns a provenance dict:
+
+        {
+          "inherited_from": "<parent vendored abs path>",
+          "vendored_to":    "<child vendored abs path>",
+          "pyproject":      {... same shape as in vendor_python_exp_from_tools ...},
+          "status":         "ok" | "parent-had-no-vendored-copy",
+        }
+
+    Refuses (raises) if the parent had no vendored copy — operator must
+    repair the parent's chain of custody first or scaffold the child via
+    `new_experiment.py` to vendor from `tools/python_exp/` instead.
+    """
+    parent_vendored = parent_code_dir / "vendored" / "python_exp"
+    child_vendored = child_code_dir / "vendored" / "python_exp"
+    pyproject = child_code_dir / "pyproject.toml"
+
+    if not parent_vendored.exists():
+        raise FileNotFoundError(
+            f"parent has no vendored python_exp at {parent_vendored}; "
+            f"branching cannot inherit a frozen library. "
+            f"vendor the parent first, or use new_experiment.py to scaffold "
+            f"a fresh experiment that vendors from tools/python_exp/."
+        )
+    if not child_vendored.exists():
+        raise RuntimeError(
+            f"branch did not produce {child_vendored}; "
+            f"check that parent's code/vendored/ was deep-copied."
+        )
+    if not pyproject.exists():
+        raise FileNotFoundError(f"pyproject.toml not found at {pyproject}")
+
+    return {
+        "inherited_from": str(parent_vendored),
+        "vendored_to": str(child_vendored),
+        "pyproject": _rewrite_python_exp_source(pyproject),
+        "status": "ok",
+    }
+
+
+def print_vendoring_provenance(prov: dict, *, source_kind: str) -> None:
+    """Pretty-print a vendoring provenance dict to stdout. `source_kind` is
+    "tools" (new_experiment) or "parent" (branch_experiment)."""
+    print(f"Vendoring provenance ({source_kind}):")
+    if source_kind == "tools":
+        print(f"  vendored python_exp from: {prov['vendored_from']}"
+              + (f" @ {prov['vendored_from_sha']}" if prov['vendored_from_sha'] else ""))
+        print(f"  vendored python_exp to:   {prov['vendored_to']}")
+    else:
+        print(f"  inherited from parent:    {prov['inherited_from']}")
+        print(f"  vendored to:              {prov['vendored_to']}")
+    py = prov["pyproject"]
+    print(f"  pyproject.toml:           {py['file']}:line {py['line_no']}")
+    if py["changed"]:
+        print(f"    old: {py['old']}")
+        print(f"    new: {py['new']}")
+    else:
+        print(f"    line unchanged: {py['new']}")
 
 
 def inherit_run_config(template_obj, parent_config, child_vars):

@@ -21,37 +21,25 @@ check-regressions = "check_regressions:main"
 py-modules = ["run_experiment", "check_regressions"]
 
 [tool.uv.sources]
-python-exp = { path = "../../../../../tools/python_exp", editable = true }
+python-exp = { path = "./vendored/python_exp" }
 
-# This experiment's code snapshot is a standalone uv project so the
-# experiment can be reproduced later without depending on project-wide
-# environment state. Add dependencies above and run `uv sync` inside this
-# directory to build an isolated environment for the run.
+# CHAIN OF CUSTODY: the [tool.uv.sources] line above points at this
+# experiment's own frozen copy of the shared library, populated at
+# scaffold time by `new_experiment.py` (from `tools/python_exp/`) or
+# `branch_experiment.py` (from the parent's vendored copy). Do not
+# repoint it at `tools/python_exp/` or add `editable = true` — that
+# would silently break reproducibility by letting future edits to the
+# shared library mutate this experiment's behavior. To pick up newer
+# shared code, re-vendor (see `references/chain-of-custody.md`),
+# don't relink.
 #
-# The shared library `python-exp` is resolved through `[tool.uv.sources]`
-# to `<root>/tools/python_exp` as an editable install, so changes to
-# shared tools are picked up without reinstalling.
-#
-# CHAIN OF CUSTODY: the editable link above is for development convenience
-# only. Before this experiment is launched (status moves from `planned`
-# to `running`), you MUST vendor `tools/python_exp/` into
-# `./vendored/python_exp/` and rewrite the source above to:
-#
-#   [tool.uv.sources]
-#   python-exp = { path = "./vendored/python_exp" }
-#
-# without `editable = true`. This makes the experiment reproducible
-# forever, independent of future changes to `tools/python_exp/`.
-# See `references/chain-of-custody.md` for the full policy.
-#
-# Keep this file versioned with the code snapshot. If the counterfactual
-# delta includes a dependency change, that change must be visible here.
+# This experiment's code snapshot is a standalone uv project — run
+# `uv sync` inside this directory to build its isolated environment.
+# Add dependencies above. If the counterfactual delta includes a
+# dependency change, that change must be visible here.
 #
 # TENSORBOARD: `tensorboard` pins the event file format that `tb-query`
-# and any shared analysis helpers read; `torch.utils.tensorboard`
-# provides the `SummaryWriter` used by `run_experiment.py`. Experiments
-# that do not want a torch dependency can swap `torch` for
-# `tensorboardX>=2.6.2` and change the import in `run_experiment.py` —
-# the writer API is identical. Pick one and stick with it within a
-# family so sibling event files stay comparable. See SKILL.md >
-# "TensorBoard logging".
+# reads; `torch.utils.tensorboard` provides the `SummaryWriter` used
+# by `run_experiment.py`. Swap `torch` for `tensorboardX>=2.6.2` if a
+# torch dep isn't wanted — writer API is identical. Pick one per
+# family so sibling event files stay comparable.

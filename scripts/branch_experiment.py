@@ -62,11 +62,13 @@ from _lib import (
     find_experiments_root,
     load_template,
     parent_slug_from_dir,
+    print_vendoring_provenance,
     render_template,
     slugify,
     sweep_identity_in_json,
     sweep_parent_identity_references,
     utcnow_iso,
+    verify_or_fix_branched_python_exp,
 )
 
 
@@ -384,6 +386,24 @@ def main() -> int:
         new_description=args.description,
     )
 
+    # 5b. Verify the parent's vendored python_exp came along with the
+    #     deep-copy and ensure the child's pyproject points at the local
+    #     vendored copy (regex-rewrites if the parent's pyproject was on
+    #     the legacy editable link). Returns provenance for the agent to
+    #     verify nothing unrelated got clobbered.
+    try:
+        vendor_prov = verify_or_fix_branched_python_exp(
+            parent_code_dir=source_dir / "code",
+            child_code_dir=exp_dir / "code",
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as e:
+        shutil.rmtree(exp_dir, ignore_errors=True)
+        print(f"error: vendored python_exp inheritance failed: {e}",
+              file=sys.stderr)
+        print(f"       scaffolded experiment directory was rolled back.",
+              file=sys.stderr)
+        return 1
+
     # 6. Sweep every JSON file under code/ for identity-bearing keys
     #    (experiment_id, slug, run_name). This includes run_config.json
     #    itself: we deliberately do NOT re-merge it through a template.
@@ -448,6 +468,8 @@ def main() -> int:
     print("Copied from source:")
     for item in COPIED_FROM_SOURCE:
         print(f"  - {item}")
+    print()
+    print_vendoring_provenance(vendor_prov, source_kind="parent")
     print()
     def _trim(v):
         s = json.dumps(v, ensure_ascii=False)

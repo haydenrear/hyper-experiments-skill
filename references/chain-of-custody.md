@@ -35,38 +35,39 @@ Every launched experiment must be reproducible from only:
 * the referenced ancestor data that it explicitly declares — **only if**
   that ancestor is itself frozen (see Rule 3).
 
-### Rule 2 — Vendor shared code before launch
+### Rule 2 — Vendor shared code at scaffold time
 
-The scaffold wires every experiment's `code/pyproject.toml` to the shared
-library via an editable link:
+`scripts/new_experiment.py` and `scripts/branch_experiment.py` vendor
+the shared `python_exp` library automatically:
 
-```toml
-[tool.uv.sources]
-python-exp = { path = "../../../../../tools/python_exp", editable = true }
-```
+- **new_experiment.py** copies `tools/python_exp/` into the new
+  experiment's `code/vendored/python_exp/` and regex-rewrites
+  `code/pyproject.toml`'s `[tool.uv.sources]` line to point at
+  `./vendored/python_exp` (without `editable = true`).
+- **branch_experiment.py** deep-copies the parent's `code/` tree
+  (which already includes the parent's `vendored/python_exp/`), so the
+  child inherits the *parent's* frozen library — not whatever
+  `tools/python_exp/` is at branch time. The child's pyproject is
+  verified to still point at `./vendored/python_exp` and
+  regex-repaired if necessary.
 
-This link is a **development convenience, not a reproducibility contract**.
-Before the experiment transitions from `planned` to `running`, the
-operator (or LLM, when launching on the operator's behalf) **must**:
+Both scripts print a "Vendoring provenance" block to stdout naming the
+source path, source git SHA (if under git), destination path, and the
+exact pyproject.toml line that was rewritten (file, line number, old,
+new) so the operator (or LLM) can verify nothing unrelated was touched.
+If vendoring fails, the half-scaffolded experiment directory is rolled
+back and the script exits non-zero — there is no "scaffolded but
+un-vendored" intermediate state.
 
-1. Copy the contents of `tools/python_exp/` into
-   `<experiment>/code/vendored/python_exp/`.
-2. Rewrite `code/pyproject.toml` to point at the vendored copy, dropping
-   the editable flag:
+Record the vendoring details (source path, source git SHA, destination
+path) in `run.md` under the "Freeze" section. The values to copy in
+are the ones the script already printed.
 
-   ```toml
-   [tool.uv.sources]
-   python-exp = { path = "./vendored/python_exp" }
-   ```
-
-3. Run `uv sync` inside `code/` and verify `run-experiment` still works.
-4. Record the vendoring in `run.md` under the "Freeze" section, including
-   the git commit SHA of `tools/python_exp/` at the time of the copy (if
-   the project is under git).
-
-The same procedure applies to any **other** shared tool under `tools/`
-that the experiment calls directly (binaries, jars, CLIs): copy the
-artifact into the experiment's own tree before launch.
+The same expectation applies to any **other** shared tool under
+`tools/` that the experiment calls directly (binaries, jars, CLIs):
+copy the artifact into the experiment's own tree before launch and
+record it in the Freeze block. Auto-vendoring currently covers
+`python_exp` only; other tools remain a manual step.
 
 ### Rule 3 — Vendor shared generation scripts
 
@@ -147,20 +148,23 @@ drifting with `tools/`".
 
 ---
 
-## Recipe: freezing an experiment manually
+## Recipe: re-vendoring an experiment manually
 
-From the project root, with the current experiment at
-`experiments/families/<family>/<exp-id>-<slug>/`:
+`new_experiment.py` and `branch_experiment.py` already vendor at scaffold
+time. You only need this recipe if you are repairing an experiment
+scaffolded under the legacy manual-freeze workflow, or re-vendoring
+against a newer `tools/python_exp/`:
 
 ```bash
 EXP=experiments/families/<family>/<exp-id>-<slug>
 
 # 1. Vendor shared library
-mkdir -p "$EXP/code/vendored"
+rm -rf "$EXP/code/vendored/python_exp"
 cp -r tools/python_exp "$EXP/code/vendored/python_exp"
 
-# 2. Rewrite [tool.uv.sources] in $EXP/code/pyproject.toml:
+# 2. Ensure [tool.uv.sources] in $EXP/code/pyproject.toml reads:
 #      python-exp = { path = "./vendored/python_exp" }
+#    (no `editable = true`).
 
 # 3. Resync and smoke-run
 ( cd "$EXP/code" && uv sync && uv run run-experiment )
@@ -171,10 +175,6 @@ git -C tools/python_exp rev-parse HEAD > "$EXP/code/vendored/python_exp.SHA"
 # 5. Append a Freeze block to $EXP/run.md (see run.md template).
 ```
 
-A follow-up ticket may automate this as `scripts/freeze_experiment.py`.
-Until then, performing these steps manually is part of the launch
-checklist and must not be skipped.
-
 ---
 
 ## LLM checklist
@@ -182,14 +182,18 @@ checklist and must not be skipped.
 When an LLM is asked to launch an experiment, it must refuse to proceed
 until:
 
-1. `code/vendored/python_exp/` exists and is populated,
+1. `code/vendored/python_exp/` exists and is populated (auto-vendored at
+   scaffold time by `new_experiment.py` / `branch_experiment.py`; if
+   missing, the experiment was scaffolded under the legacy manual-freeze
+   workflow and must be repaired with the recipe above),
 2. `code/pyproject.toml`'s `[tool.uv.sources]` points at the vendored
    copy, not the root `tools/python_exp` path,
 3. every generation-script reference in `data/manifest.md` either points
    inside this experiment or has been replaced with a vendored local
    copy,
 4. the freeze block in `run.md` has been filled in with the current
-   timestamp and (where applicable) the upstream git SHA.
+   timestamp and (where applicable) the upstream git SHA recorded in
+   the scaffolder's vendoring-provenance output.
 
 "The editable link works fine on my machine" is not an acceptable reason
 to skip any of the above. Chain of custody is a property of the archived
