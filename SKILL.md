@@ -977,13 +977,25 @@ that is either too noisy to plan from or too abstract to act on.
 ### Layer 1 — Operational ledger: `experiments/experiments.md`
 
 Backward-looking. What was run, what is running, what finished, which
-checkpoints are strong branching points. One row per experiment. This
-is the source of truth for questions like "what is exp-0042's status?"
-or "what are our active experiments this week?"
+checkpoints are strong branching points. One row per experiment, with
+the row's *table membership* (Active vs Completed) as the coarse
+project-level status signal.
 
-Update cadence: every time an experiment's status changes (launched,
-stopped, completed, archived) and every time a checkpoint is promoted
-to a strong branching point.
+The fine-grained operational status (`planned | running | stopped |
+completed | archived`) lives in **one place only**: each experiment's
+own `index.md` `Status:` field. The project ledger and family index
+do not carry a `status` column — duplicating it invites drift.
+`scripts/check_disk.py` reads status from per-experiment `index.md`.
+
+Update cadence:
+
+* When an experiment's operational state changes (launched, stopped,
+  completed, archived): update **only** that experiment's `index.md`
+  `Status:` field.
+* When an experiment finishes: move its row from Active to Completed in
+  `experiments.md` (table membership is the project-level status cut).
+* When a checkpoint is promoted to a strong branching point: update
+  `experiments.md`'s "Best parent checkpoints" table.
 
 ### Layer 2 — Cross-family index: `experiments/families/index.md`
 
@@ -1963,10 +1975,12 @@ A table with:
 * id,
 * family,
 * parent,
-* status,
 * question,
 * command,
 * directory.
+
+(No `status` column — table membership = active. Per-experiment
+operational status lives in each experiment's `index.md`.)
 
 ### Completed experiments
 
@@ -2403,9 +2417,12 @@ When the run is done or stopped:
 
 Update all three index layers (see "Index layers" above):
 
-* the child experiment directory (`results.md`, `hypotheses.md`),
+* the child experiment directory (`results.md`, `hypotheses.md`, and
+  the experiment's `index.md` `Status:` field — the canonical home for
+  operational status; do not mirror it elsewhere),
 * the parent experiment if descendant notes are relevant,
-* `experiments/experiments.md` — append the completed row, update best
+* `experiments/experiments.md` — move the row from Active to Completed
+  (table membership is the project-level status cut), update best
   checkpoints if applicable,
 * `experiments/families/<family>/index.md` — append the one-line
   finding, update working theories, config recommendations, proposed

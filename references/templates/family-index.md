@@ -77,7 +77,8 @@ theory here also appears at the cross-family level, link to
 ## Experiments in this family
 Append-only listing updated as experiments are added. `finding` is a
 one-line post-run summary; leave blank while an experiment is still
-running.
+running. Per-experiment status lives in each experiment's `index.md`
+(`Status:`); don't mirror it here.
 
-| id | title | status | finding |
-|----|-------|--------|---------|
+| id | title | finding |
+|----|-------|---------|

@@ -13,8 +13,9 @@ ledger.
 - (none yet)
 
 ## Active experiments
-| id | family | parent | status | question | command | directory |
-|----|--------|--------|--------|----------|---------|-----------|
+<!-- Membership in this table = active (planned/running/stopped). Move to "Completed experiments" when the run finishes. Per-experiment fine-grained status lives in each experiment's index.md (`Status:`). -->
+| id | family | parent | question | command | directory |
+|----|--------|--------|----------|---------|-----------|
 
 ## Completed experiments
 | id | result | main finding | next action |
