@@ -1,22 +1,22 @@
 # Plan: {{experiment_id}} — {{title}}
 
-## Research question
-{{research_question}}
+## Chain of reasoning
 
-## Parentage
-- Parent experiment: {{parent_experiment}}
+- Type: {{experiment_type}}
+- Anchor (parent): {{parent_experiment}}
+- Anchor evidence: TODO
+- Iteration (one-line delta): {{iteration_delta_oneline}}
+- Primary hypothesis: TODO
+- Falsifiers: TODO
 - Parent checkpoint: {{parent_checkpoint}}
 - Ancestor baseline: {{ancestor_baseline}}
+- Global hypothesis: [`global-hypothesis.md`](../../../../global-hypothesis.md)
 
 ## Counterfactual delta
 {{counterfactual_delta}}
 
 ## Invariants
 {{invariants}}
-
-## Expected mechanism
-<!-- Why might this change matter mechanistically? -->
-- TODO
 
 ## Implementation
 
@@ -45,12 +45,6 @@
 - TODO
 
 ### Branch criteria
-- TODO
-
-## Risks
-- TODO
-
-## Comparison targets
 - TODO
 
 ## Inherited config audit

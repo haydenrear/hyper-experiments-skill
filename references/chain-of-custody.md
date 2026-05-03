@@ -35,9 +35,6 @@ Every launched experiment must be reproducible from only:
 * the referenced ancestor data that it explicitly declares — **only if**
   that ancestor is itself frozen (see Rule 3).
 
-No experiment may depend on `tools/python_exp/`, a sibling experiment's
-`code/`, or any external state not captured in the above.
-
 ### Rule 2 — Vendor shared code before launch
 
 The scaffold wires every experiment's `code/pyproject.toml` to the shared

@@ -10,6 +10,7 @@ project by walking up from the current directory until it finds a
 - Description: {{description}}
 
 ## Layout
+- `global-hypothesis.md` — the project-level falsifiable claim every experiment ultimately tests
 - `experiments/experiments.md` — global research ledger
 - `experiments/families/<family>/` — one directory per experiment family
 - `experiments/families/<family>/<exp-id>-<slug>/` — a single experiment
@@ -18,10 +19,16 @@ project by walking up from the current directory until it finds a
   experiment's `data/manifest.md`, `run.md`, or `index.md` using a path
   relative to this file.
 
+## Global hypothesis
+The project's falsifiable claim lives in [`global-hypothesis.md`](./global-hypothesis.md). Every experiment references it. See `SKILL.md` > "Chain of reasoning".
+
 ## Protocol
 This project follows the hyper-experiments skill. Every experiment must declare:
-- parentage (parent experiment and/or parent checkpoint),
-- a bounded counterfactual delta,
+- a type (`root` or `iteration`),
+- an anchor (the empirically-viable parent it is built on; `null` only for roots),
+- a bounded counterfactual delta (the iteration — what changed vs. the anchor),
+- a primary hypothesis (why we think the delta will work, framed in terms of the global hypothesis),
+- pre-declared falsifiers (observations that would rule the primary hypothesis out),
 - explicit invariants,
 - a measurement plan,
 - continue/stop/branch decision criteria.

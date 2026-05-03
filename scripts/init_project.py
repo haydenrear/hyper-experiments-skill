@@ -3,6 +3,7 @@
 
 Creates:
   <root>/hyper-experiments.md      (project marker — used to auto-detect root)
+  <root>/global-hypothesis.md      (project-level falsifiable claim)
   <root>/experiments/experiments.md (global research ledger)
   <root>/experiments/families/     (empty; populated by new_experiment.py)
 
@@ -56,6 +57,12 @@ def main() -> int:
 
     marker.write_text(render_template(load_template("hyper-experiments.md"), vars_))
 
+    global_hypothesis = root / "global-hypothesis.md"
+    if not global_hypothesis.exists() or args.force:
+        global_hypothesis.write_text(
+            render_template(load_template("global-hypothesis.md"), vars_)
+        )
+
     ledger = root / "experiments" / "experiments.md"
     if not ledger.exists() or args.force:
         ledger.write_text(render_template(load_template("experiments.md"), vars_))
@@ -96,6 +103,7 @@ def main() -> int:
 
     print(f"Initialized hyper-experiments project at {root}")
     print(f"  - {ROOT_MARKER}")
+    print(f"  - global-hypothesis.md          (project-level falsifiable claim)")
     print(f"  - experiments/experiments.md")
     print(f"  - experiments/families/")
     print(f"  - experiments/families/index.md (cross-family strategy)")

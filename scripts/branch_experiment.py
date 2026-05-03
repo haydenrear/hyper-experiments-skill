@@ -343,6 +343,8 @@ def main() -> int:
     # 4. Render fresh index.md / plan.md / run.md / results.md / hypotheses.md /
     #    artifacts/*.md with the child's identity + branch provenance.
     branched_at = utcnow_iso()
+    iteration_delta_oneline = args.delta[0] if args.delta else "TODO"
+
     vars_ = {
         "experiment_id": exp_id,
         "slug": slug,
@@ -350,6 +352,8 @@ def main() -> int:
         "family": family,
         "status": "planned",
         "created_at": branched_at,
+        "experiment_type": "iteration",
+        "iteration_delta_oneline": iteration_delta_oneline,
         "research_question": args.question or "TODO",
         "parent_experiment": parent_id,
         "parent_checkpoint": args.checkpoint or "null",

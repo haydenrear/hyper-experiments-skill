@@ -453,6 +453,13 @@ Templates use `{{var}}` substitution. Edit them in place to customize the scaffo
    - When a rung breaks, the failure is isolated to whatever that rung introduced — you do not have to debug the whole stack.
    - See "Isolation and the complexity ladder" below.
 
+9. **Every experiment lives in a chain of reasoning anchored in a known-working root**
+   - Each experiment is either a `root` (an empirically-viable starting point with no anchor) or an `iteration` (built on a parent that is itself a root or a surviving iteration).
+   - Every iteration declares a primary hypothesis (why the delta should work, framed in terms of the project's global hypothesis) plus pre-declared falsifiers.
+   - The chain is walkable in both directions: walk up to find empirically viable ground after a failure, to localize causes, and to invalidate descendants when an ancestor is later ruled out.
+   - This is distinct from chain of *custody* (artifact reproducibility): chain of custody guarantees the numbers reproduce; chain of reasoning guarantees the numbers are interpretable as evidence.
+   - See "Chain of reasoning" below.
+
 ---
 
 ## Definitions
@@ -500,6 +507,38 @@ A measured result, trend, anomaly, or qualitative note from the run.
 ### Hypothesis
 An explanatory claim induced from observations.
 
+### Global hypothesis
+The single project-level falsifiable claim every experiment in the
+project is, ultimately, trying to test. Lives in
+`<project-root>/global-hypothesis.md`. There is exactly one per
+project; families do not have their own.
+
+### Root experiment
+An empirically-viable starting point. Has no anchor — it *is* the
+anchor for downstream iterations. The first experiment in a project
+must be a root; the first experiment of a new family typically is.
+
+### Iteration experiment
+Every experiment that is not a root. Built on an anchor (a root, or
+another iteration whose primary hypothesis is currently `surviving`),
+with a one-line delta, a primary hypothesis, and pre-declared
+falsifiers.
+
+### Anchor
+The empirically-viable parent an iteration is built on.
+
+### Primary hypothesis
+The one-sentence claim an iteration tests, framed as a contribution
+toward (or against) the global hypothesis. Distinct from the
+mechanistic / empirical / operational sub-hypotheses also recorded in
+`hypotheses.md`. Carries a status:
+`proposed | under-test | surviving | ruled-out`.
+
+### Falsifier
+A pre-declared observation that, if cleanly produced by the run, rules
+the primary hypothesis out. A hypothesis without falsifiers cannot be
+honestly tested.
+
 ### Decision
 The judgment made at a poll or at the end of the run:
 - continue,
@@ -518,6 +557,7 @@ experiment:
   id: exp-XXXX
   family: family_name
   title: short_title
+  type: root | iteration
   status: planned | running | stopped | completed | archived
 
   research_question: >
@@ -527,6 +567,20 @@ experiment:
     parent_experiment: exp-YYYY | null
     parent_checkpoint: checkpoint_name | null
     ancestor_baseline: exp-ZZZZ | null
+
+  reasoning:
+    global_hypothesis_ref: <project-root>/global-hypothesis.md
+    anchor:
+      experiment: exp-YYYY | null      # null only if type=root
+      evidence: >
+        Specific measured outcome of the anchor that grounds this iteration.
+    iteration_delta_oneline: >
+      One-line description of the change being tested vs. the anchor.
+    primary_hypothesis: >
+      Why the delta should work, framed in terms of the global hypothesis.
+    falsifiers:
+      - observation_that_would_rule_this_out
+    hypothesis_status: proposed | under-test | surviving | ruled-out
 
   counterfactual:
     change_set:
@@ -588,6 +642,122 @@ Bad example:
 Good example:
 
 * "Branch from `exp-0007` at checkpoint `ckpt-step-12000`; lower learning rate from `3e-4` to `1e-4`; keep dataset, tokenizer, architecture, seed policy, and eval suite fixed; test whether post-structure-formation low LR preserves sparsity and improves validation stability."
+
+---
+
+## Chain of reasoning
+
+The counterfactual rule above describes the shape of a single
+experiment. The chain of reasoning describes how experiments connect:
+every experiment is one link, terminating at the **global hypothesis**
+above and at one or more **root experiments** below. Distinct from
+chain of *custody* (`references/chain-of-custody.md`) — custody
+guarantees the numbers reproduce, reasoning guarantees the numbers are
+interpretable as evidence.
+
+### Global hypothesis (per project)
+
+Exactly one global hypothesis per project, in
+`<project-root>/global-hypothesis.md` — the falsifiable claim the
+whole project is testing (e.g. "configuration shape C is the most
+optimal under metric M subject to constraints"). It declares its own
+falsifiers up front; we start a project by trying to *falsify* the
+global hypothesis, not to confirm it. Families do not have their own
+global hypothesis — silently forking it mid-project is goalpost-moving;
+declare a new project instead.
+
+### Root vs iteration
+
+Every experiment has a type:
+
+- **Root** — an empirically-viable starting point. Has no anchor; it
+  *is* the anchor for downstream iterations. The first experiment in a
+  project must be a root, and the first experiment of each new family
+  typically is. A root is not speculative — its `hypotheses.md`
+  documents what the version is empirically known to do, not what we
+  hope it will do. A family may *re-root* if a fundamentally new
+  working baseline is established (e.g. a different architecture
+  proven viable); the new root is declared explicitly with its own
+  evidence, not back-fitted from a failed iteration.
+- **Iteration** — every other experiment. Anchored on a parent that
+  is itself either a root or an iteration whose primary hypothesis is
+  currently `surviving`.
+
+A "let me just see what happens" run is not an iteration; it is a
+request to declare a new root with honest "evidence: none, this is a
+probe" framing. That is allowed — exploration is allowed — but it must
+be done explicitly so the chain is honest about what it is standing on.
+
+### What every iteration declares
+
+1. **Anchor** — pointer to the parent + the *specific measured
+   outcome* of the parent that grounds this iteration. "exp-0007
+   reached val/loss 0.42 at step 12000 with sparsity preserved" is an
+   anchor. "exp-0007 was good" is not.
+2. **Iteration** — one-line description of the delta vs. the anchor.
+   Same content as the counterfactual change set, said as a single
+   sentence.
+3. **Primary hypothesis** — one sentence: why this delta should work,
+   and how the answer contributes toward (or against) the global
+   hypothesis.
+4. **Falsifiers** — observations that would rule the primary
+   hypothesis out. Declared *before* launch. A hypothesis without
+   falsifiers cannot move from `under-test` to `ruled-out`, which
+   means it cannot be honestly tested.
+
+These live in the iteration's `hypotheses.md` (live status doc) and
+are mirrored in `plan.md`'s "Chain of reasoning" header (pre-launch
+declaration).
+
+### Hypothesis lifecycle
+
+A primary hypothesis moves through:
+
+- `proposed` — declared, not yet launched,
+- `under-test` — running, results not yet final,
+- `surviving` — finished; falsifiers were checked, none triggered,
+- `ruled-out` — finished; one or more falsifiers triggered.
+
+Only `surviving` hypotheses are valid anchors for downstream
+iterations. A root is `surviving` by construction; if its anchor
+evidence is later contradicted, downgrade to `ruled-out` and flag
+descendants.
+
+### Walking up the chain
+
+The chain is walkable, and walking it is a standard operating move:
+
+- **For justification (forward)** — to launch an iteration, walk up
+  from its anchor to confirm the chain terminates at a root and every
+  intermediate link is `surviving`. If any link is `proposed`,
+  `under-test`, or `ruled-out`, the iteration is standing on shaky
+  ground and the right move is to re-anchor before launching, not to
+  proceed.
+- **To find ground after a failure** — when an iteration's primary
+  hypothesis is `ruled-out`, walk up the anchor chain to the nearest
+  `surviving` ancestor (often the root) and branch a new iteration
+  from there with what was learned. Do not patch a falsified anchor
+  in place.
+- **To trace causes** — a failure at depth N tells you something about
+  the chain `root → A → B → ... → N`. The diagnostic question is
+  *which link introduced the failure mode*; walking up while comparing
+  measurements localizes it.
+- **For backward invalidation** — if iteration A is later downgraded
+  from `surviving` to `ruled-out`, every descendant that anchored on A
+  is now standing on invalid ground and must be flagged for
+  re-anchoring (typically onto A's parent). The chain isn't only for
+  forward justification; it carries invalidation backward too.
+
+### Relationship to the complexity ladder
+
+The complexity ladder (next section) is one shape of chain of reasoning:
+rung 0 is a root, each higher rung is an iteration whose delta adds one
+piece of complexity. Other chains (parameter sweeps, architecture
+variations, schedule variations) follow the same root + iteration +
+falsifier discipline with different deltas.
+
+LLM-side enforcement of this discipline lives in "LLM operating rules"
+near the bottom of this document.
 
 ---
 
@@ -2539,7 +2709,10 @@ When using this skill, the LLM must:
 7. always write back results and hypotheses,
 8. always update the root ledger,
 9. before running anything non-trivial, confirm a minimum reproducible example exists at the bottom of the ladder, and propose building one if it does not (see "Isolation and the complexity ladder"),
-10. always invoke experiment entry points through `uv run <console-script>`; never `python <file>` or `python3 <file>` (see "Running an experiment > Why bare `python` is wrong" — bypassing `uv` silently breaks chain of custody and produces irreproducible runs).
+10. always invoke experiment entry points through `uv run <console-script>`; never `python <file>` or `python3 <file>` (see "Running an experiment > Why bare `python` is wrong" — bypassing `uv` silently breaks chain of custody and produces irreproducible runs),
+11. refuse to scaffold an iteration until type, anchor + anchor evidence, one-line iteration delta, primary hypothesis, and falsifiers are stated; refuse to declare a root without explicit "what we know works" evidence (see "Chain of reasoning"),
+12. before launching an iteration, walk the anchor chain back to a root and confirm every intermediate link is `surviving`; if any link is `proposed`, `under-test`, or `ruled-out`, surface this and ask whether to re-anchor up the chain rather than proceed,
+13. push back when the user proposes an experiment that has no chain of reasoning back to a root and the global hypothesis — agreeing with every formulation defeats the discipline.
 
 The LLM must not:
 
@@ -2548,7 +2721,9 @@ The LLM must not:
 * omit decision criteria,
 * omit lineage,
 * skip rungs of the complexity ladder when isolation is the right tool, or interpret a high-rung result while lower rungs are still red,
-* invoke `python` / `python3` directly inside an experiment, or run an entry point by file path instead of its console-script name.
+* invoke `python` / `python3` directly inside an experiment, or run an entry point by file path instead of its console-script name,
+* fabricate or back-fit a chain of reasoning to make a proposed experiment look anchored when it isn't,
+* allow a global hypothesis to silently change mid-project to match results (that is goalpost-moving — declare a new project instead).
 
 ---
 

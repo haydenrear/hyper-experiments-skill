@@ -123,10 +123,15 @@ def main() -> int:
                     help="Experiment family name (e.g. q_schedule).")
     ap.add_argument("--title", required=True,
                     help="Short human-readable title; used for the slug.")
+    ap.add_argument("--type", dest="exp_type",
+                    choices=("root", "iteration"), default="iteration",
+                    help="root = empirically-viable starting point with no anchor; "
+                         "iteration = builds on a parent (default).")
     ap.add_argument("--question", default="",
                     help="Research question this experiment tests.")
     ap.add_argument("--parent", default=None,
-                    help="Parent experiment id (e.g. exp-0001).")
+                    help="Parent experiment id (e.g. exp-0001). "
+                         "Required when --type=iteration.")
     ap.add_argument("--checkpoint", default=None,
                     help="Parent checkpoint path to resume from.")
     ap.add_argument("--ancestor", default=None,
@@ -138,6 +143,19 @@ def main() -> int:
     ap.add_argument("--command", default="",
                     help="Exact launch command.")
     args = ap.parse_args()
+
+    if args.exp_type == "iteration" and not args.parent:
+        print("error: --type=iteration requires --parent (the anchor experiment id).",
+              file=sys.stderr)
+        print("       use --type=root for an experiment with no anchor (a known-working baseline).",
+              file=sys.stderr)
+        return 1
+    if args.exp_type == "root" and args.parent:
+        print(f"error: --type=root experiments must not declare a --parent (got {args.parent!r}).",
+              file=sys.stderr)
+        print("       a root is an empirically-viable starting point; it is the anchor for downstream iterations.",
+              file=sys.stderr)
+        return 1
 
     if args.experiments_root is not None:
         root = args.experiments_root.resolve()
@@ -196,6 +214,8 @@ def main() -> int:
             print(f"warning: parent {args.parent} not found under experiments/families/",
                   file=sys.stderr)
 
+    iteration_delta_oneline = args.delta[0] if args.delta else "TODO"
+
     vars_ = {
         "experiment_id": exp_id,
         "slug": slug,
@@ -203,6 +223,8 @@ def main() -> int:
         "family": args.family,
         "status": "planned",
         "created_at": utcnow_iso(),
+        "experiment_type": args.exp_type,
+        "iteration_delta_oneline": iteration_delta_oneline,
         "research_question": args.question or "TODO",
         "parent_experiment": args.parent or "null",
         "parent_checkpoint": args.checkpoint or "null",
