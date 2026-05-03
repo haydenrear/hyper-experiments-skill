@@ -9,7 +9,6 @@ See `references/chain-of-custody.md`.
 - other vendored tools (jars, binaries, CLIs):
 - vendored generation scripts (source exp-id + path → local path):
 - referenced frozen-ancestor datasets (exp-id + path):
-- smoke-run verified (`uv sync && uv run run-experiment` succeeds): yes | no
 - operator / agent who froze:
 
 ## Launch

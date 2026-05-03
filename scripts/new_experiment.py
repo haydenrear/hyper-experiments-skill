@@ -37,6 +37,7 @@ from _lib import (
     load_template,
     print_vendoring_provenance,
     render_template,
+    run_smoke_test_and_cleanup,
     slugify,
     utcnow_iso,
     vendor_python_exp_from_tools,
@@ -88,6 +89,32 @@ def _write_run_config(*, exp_dir: Path, root: Path, parent_id, child_vars):
     merged, renames = inherit_run_config(template_obj, parent_config, child_vars)
     (exp_dir / RUN_CONFIG_OUT).write_text(json.dumps(merged, indent=2) + "\n")
     return {"renames": renames, "parent_config_path": parent_config_path}
+
+
+def _print_smoke_report(exp_dir: Path, rel: Path) -> int:
+    """Run the smoke test, clean up its artifacts, and report. Returns the
+    process exit code to propagate (0 on success, 1 on failure)."""
+    print("Smoke test: running `uv sync && uv run run-experiment` ...")
+    result = run_smoke_test_and_cleanup(exp_dir)
+    if result["skipped"]:
+        print(f"  skipped: {result['skipped']}")
+        print()
+        return 0
+    if not result["ok"]:
+        print("  FAILED — artifacts left in place for inspection.")
+        print()
+        for line in (result["stdout"] or "").splitlines()[-20:]:
+            print(f"    {line}")
+        print()
+        print(f"error: smoke test failed under {rel}/code/.", file=sys.stderr)
+        return 1
+    print("  ok.")
+    if result["removed"]:
+        print("  Cleaned up smoke artifacts:")
+        for path in result["removed"]:
+            print(f"    - {path}")
+    print()
+    return 0
 
 
 def _print_run_config_report(report, parent_id):
@@ -144,6 +171,11 @@ def main() -> int:
                     help="Declared invariant. Repeatable.")
     ap.add_argument("--command", default="",
                     help="Exact launch command.")
+    ap.add_argument("--smoke", action="store_true",
+                    help="After scaffolding, run `uv sync && uv run run-experiment` "
+                         "inside code/ to confirm the frozen experiment is "
+                         "self-reproducible, then wipe the artifacts the smoke "
+                         "produced (.venv, __pycache__, tensorboard/*, logs/*).")
     args = ap.parse_args()
 
     if args.exp_type == "iteration" and not args.parent:
@@ -273,6 +305,9 @@ def main() -> int:
     print()
     _print_run_config_report(run_config_renames, args.parent)
     print()
+    if args.smoke:
+        if _print_smoke_report(exp_dir, rel) != 0:
+            return 1
     print("Next steps:")
     print(f"  1. Fill in decision policy and measurement plan in {rel}/plan.md")
     print(f"  2. Complete {rel}/index.md (continue/stop/branch criteria, key signals)")

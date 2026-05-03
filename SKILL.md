@@ -2354,14 +2354,17 @@ The child `index.md` must point to its parent.
 
 `python_exp` was vendored automatically by `new_experiment.py` /
 `branch_experiment.py` at scaffold time (see "Chain of custody >
-Rule 2"). What remains to do at launch:
+Rule 2"). The smoke test (`uv sync && uv run run-experiment` inside
+`code/`) is also run automatically when the scaffolder is invoked with
+`--smoke`; on success the scaffolder wipes the artifacts the smoke
+produced (`.venv`, `__pycache__`, `tensorboard/*`, `logs/*`) so the
+freeze commit stays clean. On failure the artifacts are left in place
+for inspection. What remains to do at launch:
 
 * copy any shared non-Python tool (binary, jar, CLI) the experiment
   will invoke into the experiment's own tree,
 * copy any generation script referenced from another experiment into
   `data/generation-scripts/` and rewrite `data/manifest.md`,
-* run `uv sync && uv run run-experiment` inside `code/` to confirm the
-  frozen experiment is self-reproducible,
 * fill in the `Freeze` block in `run.md` (paths, SHAs, timestamp) —
   the values for the `python_exp` rows are the ones the scaffolder
   already printed in its "Vendoring provenance" block.

@@ -550,3 +550,93 @@ def inherit_run_config(template_obj, parent_config, child_vars):
         return _merge(template_obj, None, child_vars, "", changes), changes
     merged = _merge(template_obj, parent_config, child_vars, "", changes)
     return merged, changes
+
+
+# Smoke-test artifact cleanup. Running `uv sync && uv run run-experiment`
+# leaves four kinds of bytes behind that must not enter the freeze commit:
+#
+#   - <exp>/code/.venv             (per-experiment virtualenv)
+#   - <exp>/code/**/__pycache__    (bytecode caches)
+#   - <exp>/tensorboard/*          (heartbeat event file from the scaffold)
+#   - <exp>/logs/*                 (anything the scaffold logged)
+#
+# We wipe directory *contents* for tensorboard/ and logs/ rather than
+# removing the dirs themselves — the run script expects them to exist
+# (`logdir.mkdir(parents=True, exist_ok=True)` only covers tensorboard).
+_SMOKE_REMOVED_TREES = (("code", ".venv"),)
+_SMOKE_RECURSIVE_DIRS = ("__pycache__",)
+_SMOKE_WIPE_CONTENTS = (("tensorboard",), ("logs",))
+
+
+def _wipe_dir_contents(d: Path) -> list:
+    if not d.is_dir():
+        return []
+    removed: list = []
+    for child in d.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+        removed.append(child)
+    return removed
+
+
+def run_smoke_test_and_cleanup(exp_dir: Path) -> dict:
+    """Run `uv sync && uv run run-experiment` inside `<exp>/code/`, then
+    delete the artifacts the smoke run produced.
+
+    Returns:
+        {
+          "ok":          bool,
+          "stdout":      str,         # combined stdout/stderr from sync+run
+          "removed":     list[Path],  # paths removed (relative to exp_dir)
+          "uv":          str | None,  # resolved uv binary
+          "skipped":     str | None,  # reason if smoke was skipped (e.g. no uv)
+        }
+
+    Cleanup runs only when the smoke test exits 0 — a failed smoke leaves
+    artifacts in place so the operator can inspect them.
+    """
+    code_dir = exp_dir / "code"
+    out: dict = {"ok": False, "stdout": "", "removed": [], "uv": None, "skipped": None}
+
+    uv = shutil.which("uv")
+    if uv is None:
+        out["skipped"] = "uv not on PATH"
+        return out
+    out["uv"] = uv
+
+    sync = subprocess.run(
+        [uv, "sync"], cwd=str(code_dir),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    out["stdout"] += sync.stdout or ""
+    if sync.returncode != 0:
+        return out
+
+    run = subprocess.run(
+        [uv, "run", "run-experiment"], cwd=str(code_dir),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    out["stdout"] += run.stdout or ""
+    if run.returncode != 0:
+        return out
+
+    out["ok"] = True
+    removed: list = []
+    for parts in _SMOKE_REMOVED_TREES:
+        target = exp_dir.joinpath(*parts)
+        if target.is_dir():
+            shutil.rmtree(target)
+            removed.append(Path(*parts))
+    for name in _SMOKE_RECURSIVE_DIRS:
+        for d in list(code_dir.rglob(name)):
+            if d.is_dir():
+                shutil.rmtree(d)
+                removed.append(d.relative_to(exp_dir))
+    for parts in _SMOKE_WIPE_CONTENTS:
+        target = exp_dir.joinpath(*parts)
+        for child in _wipe_dir_contents(target):
+            removed.append(child.relative_to(exp_dir))
+    out["removed"] = removed
+    return out
