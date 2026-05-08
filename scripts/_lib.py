@@ -13,6 +13,9 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "references" / "templat
 ROOT_MARKER = "hyper-experiments.md"
 EXP_ID_RE = re.compile(r"^exp-(\d{4})")
 
+VALID_VARIANTS = ("default", "evolve")
+DEFAULT_VARIANT = "default"
+
 
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -28,8 +31,74 @@ def bullet_list(items):
     return "\n".join(f"- {it}" for it in items)
 
 
-def load_template(name: str) -> str:
+def load_template(name: str, variant: str | None = None) -> str:
+    """Read a template by name, with optional variant override.
+
+    Variant resolution order:
+      1. `<variant>/<name>` if `variant` is given and the file exists,
+      2. fallback to `<name>` at the templates root.
+
+    This lets common templates (index.md, plan.md, ...) live once at
+    the root while letting a variant override only the files it needs
+    to change (typically the `code-*` set). The default variant has
+    its `code-*` set under `default/`; the evolve variant has its
+    expanded `code-*` set under `evolve/`.
+    """
+    if variant:
+        candidate = TEMPLATES_DIR / variant / name
+        if candidate.exists():
+            return candidate.read_text()
     return (TEMPLATES_DIR / name).read_text()
+
+
+def template_exists(name: str, variant: str | None = None) -> bool:
+    """Return True if `<variant>/<name>` or `<name>` exists in templates."""
+    if variant and (TEMPLATES_DIR / variant / name).exists():
+        return True
+    return (TEMPLATES_DIR / name).exists()
+
+
+_VARIANT_FIELD_RE = re.compile(r"^- Variant:\s*(\S+)\s*$", re.MULTILINE)
+
+
+def project_variant_from_marker(root: Path) -> str:
+    """Read the project's default variant from `<root>/hyper-experiments.md`.
+
+    Returns DEFAULT_VARIANT if the marker has no Variant line (legacy
+    projects scaffolded before variants existed).
+    """
+    marker = root / ROOT_MARKER
+    if not marker.exists():
+        return DEFAULT_VARIANT
+    m = _VARIANT_FIELD_RE.search(marker.read_text())
+    if m and m.group(1) in VALID_VARIANTS:
+        return m.group(1)
+    return DEFAULT_VARIANT
+
+
+def experiment_variant_from_run_config(exp_dir: Path) -> str:
+    """Read an experiment's variant from `code/run_config.json`.
+
+    Returns DEFAULT_VARIANT when the file is missing or doesn't carry a
+    `variant` field (legacy experiments scaffolded before variants
+    existed are default by definition)."""
+    cfg = exp_dir / "code" / "run_config.json"
+    if not cfg.exists():
+        return DEFAULT_VARIANT
+    try:
+        obj = json.loads(cfg.read_text())
+    except json.JSONDecodeError:
+        return DEFAULT_VARIANT
+    v = obj.get("variant")
+    return v if v in VALID_VARIANTS else DEFAULT_VARIANT
+
+
+def validate_variant(variant: str) -> str:
+    if variant not in VALID_VARIANTS:
+        raise ValueError(
+            f"unknown variant {variant!r}; valid: {', '.join(VALID_VARIANTS)}"
+        )
+    return variant
 
 
 def render_template(template: str, vars: dict) -> str:
@@ -581,9 +650,14 @@ def _wipe_dir_contents(d: Path) -> list:
     return removed
 
 
-def run_smoke_test_and_cleanup(exp_dir: Path) -> dict:
+def run_smoke_test_and_cleanup(exp_dir: Path, variant: str = DEFAULT_VARIANT) -> dict:
     """Run `uv sync && uv run run-experiment` inside `<exp>/code/`, then
     delete the artifacts the smoke run produced.
+
+    For the `evolve` variant, the run-experiment invocation is wrapped
+    with `OPENEVOLVE_SMOKE=1` so it short-circuits before any LLM call —
+    the smoke goal is "scaffold reproduces and entry points import",
+    not "burn API credits."
 
     Returns:
         {
@@ -614,9 +688,14 @@ def run_smoke_test_and_cleanup(exp_dir: Path) -> dict:
     if sync.returncode != 0:
         return out
 
+    import os as _os
+    run_env = _os.environ.copy()
+    if variant == "evolve":
+        run_env["OPENEVOLVE_SMOKE"] = "1"
     run = subprocess.run(
         [uv, "run", "run-experiment"], cwd=str(code_dir),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        env=run_env,
     )
     out["stdout"] += run.stdout or ""
     if run.returncode != 0:

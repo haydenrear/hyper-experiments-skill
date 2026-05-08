@@ -124,7 +124,9 @@ Lays down the root marker, ledger, and directory scaffold in an existing or new 
 python scripts/init_project.py \
     --root /path/to/repo \
     --project-name "my-project" \
-    --description "one-line description"
+    --description "one-line description" \
+    --variant default              # or `evolve`; sets the project's default
+                                   # for new experiments. See "Variants" below.
 ```
 
 Creates:
@@ -185,7 +187,10 @@ python scripts/new_experiment.py \
     --delta "learning_rate: 3e-4 -> 1e-4" \
     --invariant "dataset unchanged" \
     --invariant "architecture unchanged" \
-    --command "python train.py --config configs/exp-0002.yaml --resume ..."
+    --command "python train.py --config configs/exp-0002.yaml --resume ..." \
+    # --variant evolve              # optional; defaults to the project's
+                                    # variant from hyper-experiments.md.
+                                    # See "Variants" below.
 ```
 
 Creates `experiments/families/<family>/<exp-NNNN>-<slug>/` containing:
@@ -2672,10 +2677,18 @@ Concrete markdown templates for every required file live in `references/template
 - `artifacts-agents.md` → `artifacts/AGENTS.md`
 - `artifacts-memory.md` → `artifacts/memory.md`
 - `manifest.md` → `data/manifest.md`
-- `code-pyproject.toml` → `code/pyproject.toml`
-- `code-run-experiment.py` → `code/run_experiment.py` (carries the per-experiment `run_baselines()` hook)
-- `code-run-config.json` → `code/run_config.json` (with parent-aware inheritance; see below)
-- `code-check-regressions.py` → `code/check_regressions.py`
+- `default/code-pyproject.toml` → `code/pyproject.toml` (default variant)
+- `default/code-run-experiment.py` → `code/run_experiment.py` (carries the per-experiment `run_baselines()` hook)
+- `default/code-run-config.json` → `code/run_config.json` (with parent-aware inheritance; see below)
+- `default/code-check-regressions.py` → `code/check_regressions.py`
+- `evolve/code-pyproject.toml` → `code/pyproject.toml` (evolve variant — depends on `openevolve`)
+- `evolve/code-run-experiment.py` → `code/run_experiment.py` (drives the openevolve loop)
+- `evolve/code-run-config.json` → `code/run_config.json` (carries `openevolve.*` block)
+- `evolve/code-check-regressions.py` → `code/check_regressions.py` (asserts the openevolve API)
+- `evolve/code-initial-program.py` → `code/initial_program.py` (seed with EVOLVE-BLOCK markers)
+- `evolve/code-evaluator.py` → `code/evaluator.py` (the openevolve fitness function)
+- `evolve/code-config.yaml` → `code/config.yaml` (openevolve config)
+- `evolve/artifacts-agents.md` → `artifacts/AGENTS.md` (variant-specific override)
 - `tools-python-exp-pyproject.toml` → `tools/python_exp/pyproject.toml` (written by `init_project.py`)
 - `tools-python-exp-init.py` → `tools/python_exp/src/python_exp/__init__.py` (written by `init_project.py`)
 - `project-scripts-new-experiment.py` → `<root>/scripts/new_experiment.py` (project-local wrapper, written by `init_project.py`)
@@ -2684,12 +2697,113 @@ Concrete markdown templates for every required file live in `references/template
 
 See the "Required files per experiment" section above for the content each scaffolded stub must grow into before launch.
 
-Supported `{{var}}` substitutions: `experiment_id`, `slug`, `title`, `family`, `status`, `created_at`, `research_question`, `parent_experiment`, `parent_checkpoint`, `parent_directory`, `ancestor_baseline`, `counterfactual_delta`, `invariants`, `command`, `branched_from`, `branched_at`, `branch_copied_files`, `project_name`, `description`.
+Supported `{{var}}` substitutions: `experiment_id`, `slug`, `title`, `family`, `variant`, `status`, `created_at`, `research_question`, `parent_experiment`, `parent_checkpoint`, `parent_directory`, `ancestor_baseline`, `counterfactual_delta`, `invariants`, `command`, `branched_from`, `branched_at`, `branch_copied_files`, `project_name`, `description`.
 
 Not every template uses every variable; templates not touched by a given
 variable pass it through untouched.
 
 To customize the scaffolded output for a project, edit the template files in place. To extend the `{{var}}` set, update `scripts/_lib.py` and the relevant CLI args in `scripts/new_experiment.py`.
+
+---
+
+## Variants
+
+The skill supports multiple **variants** of the experiment scaffold. A
+variant only changes the contents of the per-experiment `code/`
+directory (and a small handful of variant-aware overrides for files
+like `artifacts/AGENTS.md`); everything else — the lineage object
+model, the chain-of-reasoning protocol, the freeze procedure, the
+indexes — is identical across variants.
+
+The two variants today:
+
+| Variant   | Purpose                                                                 | Distinct files in `code/`                                                                |
+|-----------|-------------------------------------------------------------------------|------------------------------------------------------------------------------------------|
+| `default` | Conventional ML run (PyTorch + tensorboard + custom train loop).        | `pyproject.toml`, `run_experiment.py`, `run_config.json`, `check_regressions.py`.        |
+| `evolve`  | OpenEvolve evolutionary loop (LLM mutates a seed program iteratively).  | All of the above plus `initial_program.py`, `evaluator.py`, `config.yaml`. `pyproject.toml` depends on `openevolve` instead of `torch`. |
+
+**Where the variant is stored:**
+
+- Project default — `<root>/hyper-experiments.md`'s `Variant:` line. Set
+  by `init_project.py --variant {default|evolve}` (default `default`).
+  `new_experiment.py` reads this when no `--variant` is passed.
+- Per-experiment — `code/run_config.json`'s `"variant"` field. Surfaced
+  in `index.md` for visibility. Branched experiments inherit this from
+  their source automatically (the deep-copy carries it).
+
+**Choosing a variant on a new experiment:**
+
+```bash
+python scripts/new_experiment.py \
+    --variant evolve \
+    --family kernel_search \
+    --title "evolve Metal attention kernel" \
+    --type root
+```
+
+Omit `--variant` to use the project default.
+
+**Branching across variants** is intentionally not supported — branching
+deep-copies the parent's `code/`, and a default→evolve transition
+(or vice versa) would produce a child whose code mixes the two
+mechanisms. Use `new_experiment.py --variant <other>` to start a fresh
+scaffold in the other variant.
+
+### Evolve-variant essentials
+
+Read the openevolve README for the full picture; the points that matter
+for hyper-experiments:
+
+- **Seed** (`code/initial_program.py`): the program the LLM mutates.
+  Mark mutable regions with `# EVOLVE-BLOCK-START` / `# EVOLVE-BLOCK-END`.
+  Imports of `python_exp` and the non-evolving outer wrapper live
+  OUTSIDE the markers (the LLM can delete anything inside).
+- **Evaluator** (`code/evaluator.py`): `evaluate(program_path)` returns
+  an `EvaluationResult(metrics={"combined_score": ..., ...},
+  artifacts={...})`. `evaluate_stage1` is the cheap pre-filter for
+  cascade evaluation.
+- **OpenEvolve config** (`code/config.yaml`): LLM ensemble, prompt
+  system message, MAP-Elites database parameters, evaluator
+  thresholds. The system message is the most important knob — iterate
+  on it explicitly and treat changes as their own counterfactual delta.
+- **Run config** (`code/run_config.json`): hyper-experiments-side state
+  (paths, parent identity, `openevolve.config_file` /
+  `openevolve.initial_program` / `openevolve.evaluator` /
+  `openevolve.iterations` / `openevolve.checkpoint_resume`).
+- **Smoke** (`OPENEVOLVE_SMOKE=1 uv run run-experiment`): validates
+  scaffold without making any LLM call. The scaffolder's `--smoke`
+  flag sets this automatically for evolve experiments.
+- **Required env**: `OPENAI_API_KEY` (used regardless of provider; set
+  `llm.api_base` in `config.yaml` to route to Gemini / a local model /
+  OptiLLM / etc.). Never commit the key.
+
+### Counterfactual deltas in an evolve experiment
+
+The "delta vs. parent" can land in any of these places — all of them
+are legitimate counterfactual subjects:
+
+| Where the delta lives                      | Example                                       |
+|--------------------------------------------|-----------------------------------------------|
+| `config.yaml` LLM section                  | swap primary model, change ensemble weights   |
+| `config.yaml` prompt.system_message        | sharpen role / constraints                    |
+| `config.yaml` database section             | larger population, more islands, new feature  |
+| `evaluator.py` (fitness function)          | new metric, different cascade threshold       |
+| `initial_program.py` seed                  | different starting algorithm                  |
+| `run_config.json` openevolve.iterations    | longer / shorter search budget                |
+
+Whatever changed must be visible in `plan.md`'s "Counterfactual delta"
+and audited in the "Inherited config audit" block (when branching) so
+the next reader can tell what is deliberate and what is leftover from
+the parent.
+
+### Meta-loop framing
+
+Sometimes only one element is being evolved — the "experiment" looks
+like a single openevolve run. That's fine; it still fits the
+counterfactual model. Document the loop's structure (what is the seed,
+what is the contract, what is being scored, where the loop
+terminates) in `plan.md`'s 'Implementation' section so the lineage is
+legible even when the loop is degenerate.
 
 ---
 

@@ -58,6 +58,7 @@ from _lib import (
     allocate_experiment_id,
     bullet_list,
     enumerate_inherited_leaves,
+    experiment_variant_from_run_config,
     find_experiment_dir,
     find_experiments_root,
     load_template,
@@ -360,11 +361,19 @@ def main() -> int:
     branched_at = utcnow_iso()
     iteration_delta_oneline = args.delta[0] if args.delta else "TODO"
 
+    # Variant is inherited from the source experiment — branching is
+    # variant-blind by construction (it deep-copies whatever the parent
+    # had in code/). We just propagate the value into freshly-rendered
+    # templates so e.g. index.md shows the right variant tag and the
+    # same `{{variant}}` placeholder resolves.
+    variant = experiment_variant_from_run_config(source_dir)
+
     vars_ = {
         "experiment_id": exp_id,
         "slug": slug,
         "title": args.title,
         "family": family,
+        "variant": variant,
         "status": "planned",
         "created_at": branched_at,
         "experiment_type": "iteration",
@@ -385,7 +394,7 @@ def main() -> int:
     (exp_dir / "artifacts").mkdir(exist_ok=True)
     for out_name, tmpl_name in FRESH_FILE_TEMPLATES.items():
         (exp_dir / out_name).write_text(
-            render_template(load_template(tmpl_name), vars_)
+            render_template(load_template(tmpl_name, variant=variant), vars_)
         )
 
     # 5. Rewrite name-bearing slots in the copied code/pyproject.toml.
@@ -475,6 +484,7 @@ def main() -> int:
     print(f"Branched {args.source} -> {exp_id} at {rel}")
     print(f"  branched_at: {branched_at}")
     print(f"  family: {family}" + (" (inherited from source)" if args.family is None else ""))
+    print(f"  variant: {variant} (inherited from source)")
     print(f"  lineage parent: {parent_id}"
           + (" (== source)" if parent_id == args.source else ""))
     print()

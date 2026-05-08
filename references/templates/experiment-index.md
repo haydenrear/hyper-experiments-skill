@@ -2,6 +2,7 @@
 
 - Title: {{title}}
 - Family: {{family}}
+- Variant: {{variant}}
 - Status: {{status}}
 - Created: {{created_at}}
 

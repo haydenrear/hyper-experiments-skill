@@ -8,6 +8,15 @@ project by walking up from the current directory until it finds a
 - Name: {{project_name}}
 - Created: {{created_at}}
 - Description: {{description}}
+- Variant: {{variant}}
+
+<!-- `Variant` is the project's default for new experiments. Per-
+     experiment variant lives in `code/run_config.json["variant"]`. The
+     two valid values today are `default` (PyTorch + tensorboard) and
+     `evolve` (an OpenEvolve evolutionary loop, see SKILL.md > Variants).
+     Tooling reads this line to pick the right `references/templates/`
+     overlay when scaffolding a new experiment. -->
+
 
 ## Layout
 - `global-hypothesis.md` — the project-level falsifiable claim every experiment ultimately tests

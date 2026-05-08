@@ -18,7 +18,14 @@ import argparse
 import sys
 from pathlib import Path
 
-from _lib import load_template, render_template, utcnow_iso, ROOT_MARKER
+from _lib import (
+    DEFAULT_VARIANT,
+    ROOT_MARKER,
+    VALID_VARIANTS,
+    load_template,
+    render_template,
+    utcnow_iso,
+)
 
 
 def main() -> int:
@@ -29,6 +36,13 @@ def main() -> int:
                     help="Human-readable project name.")
     ap.add_argument("--description", default="",
                     help="One-paragraph project description.")
+    ap.add_argument("--variant", choices=VALID_VARIANTS, default=DEFAULT_VARIANT,
+                    help="Project's default variant for new experiments. "
+                         "`default` = PyTorch + tensorboard scaffold; "
+                         "`evolve` = OpenEvolve evolutionary loop scaffold. "
+                         "Per-experiment variant can override this via "
+                         "`new_experiment.py --variant ...`. Branches inherit "
+                         "their parent's variant automatically.")
     ap.add_argument("--force", action="store_true",
                     help="Overwrite existing marker / ledger if present.")
     args = ap.parse_args()
@@ -53,6 +67,7 @@ def main() -> int:
         "project_name": args.project_name,
         "description": args.description or "TODO",
         "created_at": utcnow_iso(),
+        "variant": args.variant,
     }
 
     marker.write_text(render_template(load_template("hyper-experiments.md"), vars_))
@@ -102,6 +117,7 @@ def main() -> int:
             out_path.chmod(0o755)
 
     print(f"Initialized hyper-experiments project at {root}")
+    print(f"  default variant: {args.variant}")
     print(f"  - {ROOT_MARKER}")
     print(f"  - global-hypothesis.md          (project-level falsifiable claim)")
     print(f"  - experiments/experiments.md")

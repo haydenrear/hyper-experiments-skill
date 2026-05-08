@@ -1,0 +1,81 @@
+# OpenEvolve configuration for {{experiment_id}} — {{title}}.
+#
+# This file is the source of truth for the evolutionary search itself
+# (LLM ensemble, database / island settings, prompt scaffolding,
+# evaluator timeouts). The hyper-experiments `run_config.json` lives
+# alongside this file and points at it via `openevolve.config_file`.
+#
+# Where to set things:
+#   * Counterfactual delta in `LLM/prompt/database` parameters → edit
+#     this file. Record the change in `plan.md`'s counterfactual delta
+#     and `run_config.json` will not be touched.
+#   * Anything outside openevolve (paths, baselines, project metadata)
+#     → `run_config.json` in this directory.
+#
+# Default LLM: a local OpenAI-compatible server on http://localhost:8000
+# serving `/v1/chat/completions`. The default model is
+# `claude_claude-sonnet-4-6` — this is the model the local proxy
+# routes to, not a value sent to Anthropic directly. Switch the
+# `api_base` / model below to point at a remote provider (OpenAI,
+# Gemini, etc.) when running outside the local environment.
+#
+# Auth: openevolve always reads `OPENAI_API_KEY` from the environment.
+# Local servers usually ignore the value but the SDK still requires
+# *something* be set; `code/run_experiment.py` defaults it to a sentinel
+# when unset so the local path works out of the box.
+
+max_iterations: 100
+checkpoint_interval: 10
+random_seed: 42 # full reproducibility — see openevolve README
+
+# LLM ensemble. Adjust weights / models for the counterfactual you are
+# testing. Keep `temperature` and `timeout` consistent across siblings
+# unless the delta is specifically about them.
+llm:
+  primary_model: "CLAUDE_claude-sonnet-4-6"
+  primary_model_weight: 0.8
+  secondary_model: "CLAUDE_claude-sonnet-4-6"
+  secondary_model_weight: 0.2
+  api_base: "http://localhost:8000/v1"
+  temperature: 0.7
+  max_tokens: 16000
+  timeout: 120
+
+# System message — the most important knob. See the openevolve README's
+# "Crafting Effective System Messages" section. Iterate on this prompt
+# explicitly; treat changes to it as a counterfactual delta in their
+# own right.
+prompt:
+  system_message: |
+    You are an expert programmer working on the {{family}} family of
+    experiments. Your task is to improve the seed program for
+    {{experiment_id}} ({{title}}).
+
+    TODO: replace this placeholder with the experiment-specific
+    guidance. Include:
+      - what is being optimized (objective in plain language),
+      - constraints (what must NOT change — function signatures, I/O
+        contract, external API),
+      - the kinds of optimization that count as progress.
+
+# MAP-Elites database. Population / islands shape exploration breadth.
+database:
+  population_size: 50
+  archive_size: 20
+  num_islands: 3
+  elite_selection_ratio: 0.2
+  exploitation_ratio: 0.7
+  similarity_threshold: 0.99
+
+# Evaluator settings. `cascade_thresholds` is the score(s) a candidate
+# must clear at each stage to graduate to the next.
+evaluator:
+  timeout: 60
+  cascade_thresholds: [0.5]
+  parallel_evaluations: 3
+  enable_artifacts: true
+
+# Evolution mode: diff_based_evolution=true means the LLM emits diffs
+# (cheaper, smaller mutations); false = full rewrites.
+diff_based_evolution: true
+max_code_length: 20000

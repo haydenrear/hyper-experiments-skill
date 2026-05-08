@@ -29,6 +29,8 @@ import sys
 from pathlib import Path
 
 from _lib import (
+    DEFAULT_VARIANT,
+    VALID_VARIANTS,
     allocate_experiment_id,
     bullet_list,
     find_experiment_dir,
@@ -36,6 +38,7 @@ from _lib import (
     inherit_run_config,
     load_template,
     print_vendoring_provenance,
+    project_variant_from_marker,
     render_template,
     run_smoke_test_and_cleanup,
     slugify,
@@ -69,12 +72,24 @@ CODE_FILES = {
     "code/check_regressions.py": "code-check-regressions.py",
 }
 
+# Variant-specific code/ files added on top of CODE_FILES. Maps the
+# output path inside the experiment to the template name (the loader
+# resolves it under `references/templates/<variant>/`).
+EXTRA_CODE_FILES_BY_VARIANT = {
+    "default": {},
+    "evolve": {
+        "code/initial_program.py": "code-initial-program.py",
+        "code/evaluator.py": "code-evaluator.py",
+        "code/config.yaml": "code-config.yaml",
+    },
+}
 
-def _write_run_config(*, exp_dir: Path, root: Path, parent_id, child_vars):
+
+def _write_run_config(*, exp_dir: Path, root: Path, parent_id, child_vars, variant):
     """Render `code/run_config.json` for the child, inheriting from the parent
     config when one exists. Returns a list of (path, old, new) renames so the
     caller can report them."""
-    template_obj = json.loads(load_template(RUN_CONFIG_TEMPLATE))
+    template_obj = json.loads(load_template(RUN_CONFIG_TEMPLATE, variant=variant))
 
     parent_config = None
     parent_config_path = None
@@ -91,11 +106,15 @@ def _write_run_config(*, exp_dir: Path, root: Path, parent_id, child_vars):
     return {"renames": renames, "parent_config_path": parent_config_path}
 
 
-def _print_smoke_report(exp_dir: Path, rel: Path) -> int:
+def _print_smoke_report(exp_dir: Path, rel: Path, variant: str) -> int:
     """Run the smoke test, clean up its artifacts, and report. Returns the
     process exit code to propagate (0 on success, 1 on failure)."""
-    print("Smoke test: running `uv sync && uv run run-experiment` ...")
-    result = run_smoke_test_and_cleanup(exp_dir)
+    if variant == "evolve":
+        print("Smoke test: running `uv sync && OPENEVOLVE_SMOKE=1 uv run run-experiment` "
+              "(no LLM calls) ...")
+    else:
+        print("Smoke test: running `uv sync && uv run run-experiment` ...")
+    result = run_smoke_test_and_cleanup(exp_dir, variant=variant)
     if result["skipped"]:
         print(f"  skipped: {result['skipped']}")
         print()
@@ -175,7 +194,15 @@ def main() -> int:
                     help="After scaffolding, run `uv sync && uv run run-experiment` "
                          "inside code/ to confirm the frozen experiment is "
                          "self-reproducible, then wipe the artifacts the smoke "
-                         "produced (.venv, __pycache__, tensorboard/*, logs/*).")
+                         "produced (.venv, __pycache__, tensorboard/*, logs/*). "
+                         "For the `evolve` variant the smoke run sets "
+                         "OPENEVOLVE_SMOKE=1 to avoid LLM calls.")
+    ap.add_argument("--variant", choices=VALID_VARIANTS, default=None,
+                    help="Experiment variant. Defaults to the project's default "
+                         "(read from `hyper-experiments.md`'s `Variant:` line). "
+                         "`default` = PyTorch + tensorboard scaffold; "
+                         "`evolve` = OpenEvolve loop scaffold (initial_program.py, "
+                         "evaluator.py, config.yaml in code/).")
     args = ap.parse_args()
 
     if args.exp_type == "iteration" and not args.parent:
@@ -205,6 +232,9 @@ def main() -> int:
             print("       run scripts/init_project.py first, or pass --experiments-root.",
                   file=sys.stderr)
             return 1
+
+    project_default_variant = project_variant_from_marker(root)
+    variant = args.variant or project_default_variant
 
     exp_id = allocate_experiment_id(root)
     slug = slugify(args.title)
@@ -255,6 +285,7 @@ def main() -> int:
         "slug": slug,
         "title": args.title,
         "family": args.family,
+        "variant": variant,
         "status": "planned",
         "created_at": utcnow_iso(),
         "experiment_type": args.exp_type,
@@ -274,15 +305,20 @@ def main() -> int:
 
     for out_name, tmpl_name in FILE_TEMPLATES.items():
         (exp_dir / out_name).write_text(
-            render_template(load_template(tmpl_name), vars_)
+            render_template(load_template(tmpl_name, variant=variant), vars_)
         )
     for out_name, tmpl_name in {**ARTIFACT_FILES, **DATA_FILES, **CODE_FILES}.items():
         (exp_dir / out_name).write_text(
-            render_template(load_template(tmpl_name), vars_)
+            render_template(load_template(tmpl_name, variant=variant), vars_)
+        )
+    for out_name, tmpl_name in EXTRA_CODE_FILES_BY_VARIANT.get(variant, {}).items():
+        (exp_dir / out_name).write_text(
+            render_template(load_template(tmpl_name, variant=variant), vars_)
         )
 
     run_config_renames = _write_run_config(
-        exp_dir=exp_dir, root=root, parent_id=args.parent, child_vars=vars_,
+        exp_dir=exp_dir, root=root, parent_id=args.parent,
+        child_vars=vars_, variant=variant,
     )
 
     try:
@@ -300,13 +336,17 @@ def main() -> int:
 
     rel = exp_dir.relative_to(root)
     print(f"Created {exp_id} at {rel}")
+    variant_note = ""
+    if args.variant is None:
+        variant_note = f" (project default from {root.name}/hyper-experiments.md)"
+    print(f"  variant: {variant}{variant_note}")
     print()
     print_vendoring_provenance(vendor_prov, source_kind="tools")
     print()
     _print_run_config_report(run_config_renames, args.parent)
     print()
     if args.smoke:
-        if _print_smoke_report(exp_dir, rel) != 0:
+        if _print_smoke_report(exp_dir, rel, variant) != 0:
             return 1
     print("Next steps:")
     print(f"  1. Fill in decision policy and measurement plan in {rel}/plan.md")
