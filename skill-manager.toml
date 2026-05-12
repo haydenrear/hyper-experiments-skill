@@ -4,7 +4,9 @@
 # Transitive skill deps. Prefixes:
 #   skill:<name>[@<version>]  registry lookup
 #   file:<path>               sub-skill bundled in this directory
-skill_references = []
+skill_references = [
+    "acp-cdc-ai-python@0.1.0",
+]
 
 # CLI tools the skill needs on PATH. `spec` selects the installer backend:
 #   pip:<pkg>[==ver]   platform-independent (bundled uv)

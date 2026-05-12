@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import sys
@@ -62,6 +63,7 @@ from _lib import (
     find_experiment_dir,
     find_experiments_root,
     load_template,
+    openevolve_latest_checkpoint,
     parent_slug_from_dir,
     print_vendoring_provenance,
     render_template,
@@ -250,6 +252,94 @@ def _rewrite_pyproject_name(
     pyproject_path.write_text(text)
 
 
+def _print_openevolve_db_report(report: dict, *, source_dir: Path,
+                                exp_dir: Path, root: Path) -> None:
+    """Surface the database-inheritance decision in the branch report.
+
+    Three cases: (a) inherited the source's latest checkpoint,
+    (b) operator passed `--new-openevolve-database` so the child starts
+    fresh, (c) the source has no openevolve checkpoints yet so there's
+    nothing to inherit. In all three the child writes its OWN future
+    checkpoints into `<child>/logs/openevolve_output/`; "inherits"
+    means "seeded from", not "shares files".
+    """
+    rel_child = exp_dir.relative_to(root)
+    print("OpenEvolve database:")
+    print(f"  child writes to:   {rel_child}/logs/openevolve_output/")
+    if report["mode"] == "inherited":
+        ckpt_rel = report["parent_checkpoint"].relative_to(root)
+        print(f"  inherited from:    {ckpt_rel}  (iteration {report['iteration']})")
+        print(f"  checkpoint_resume: {report['relative']!r}")
+        print(f"  -> run_experiment.py will load the source's MAP-Elites state at")
+        print(f"     launch and continue the search from there. Re-run with")
+        print(f"     `--new-openevolve-database` if the counterfactual delta")
+        print(f"     invalidates the parent's search state (different seed,")
+        print(f"     evaluator contract change, database-shape change in config.yaml).")
+    elif report["mode"] == "fresh-by-flag":
+        print(f"  inherited from:    none (--new-openevolve-database was passed)")
+        print(f"  checkpoint_resume: null")
+        print(f"  -> child starts a fresh database. The seed program is scored as")
+        print(f"     iteration 0 by openevolve.")
+    else:  # fresh-no-parent-db
+        rel_src = source_dir.relative_to(root)
+        print(f"  inherited from:    none (source {rel_src} has no openevolve")
+        print(f"                     checkpoints yet — its logs/openevolve_output/")
+        print(f"                     is empty)")
+        print(f"  checkpoint_resume: null")
+        print(f"  -> child starts a fresh database. If you wanted to resume from")
+        print(f"     the source, launch the source first and re-branch once it")
+        print(f"     has at least one checkpoint, or set `checkpoint_resume` by")
+        print(f"     hand in {rel_child}/code/run_config.json before launch.")
+
+
+def _inherit_openevolve_db(
+    *,
+    exp_dir: Path,
+    source_dir: Path,
+    new_database: bool,
+    root: Path,
+) -> dict:
+    """Set the child's `openevolve.checkpoint_resume` so it resumes from
+    the source's latest MAP-Elites snapshot.
+
+    Returns a report dict for the caller to print:
+        {
+          "mode":              "inherited" | "fresh-by-flag" | "fresh-no-parent-db",
+          "parent_checkpoint": absolute Path or None,
+          "relative":          string written into run_config.json or None,
+          "iteration":         int or None,
+        }
+    """
+    child_config_path = exp_dir / "code" / "run_config.json"
+    if not child_config_path.exists():
+        return {"mode": "fresh-no-parent-db", "parent_checkpoint": None,
+                "relative": None, "iteration": None}
+
+    cfg = json.loads(child_config_path.read_text())
+    openevolve = cfg.setdefault("openevolve", {})
+
+    if new_database:
+        openevolve["checkpoint_resume"] = None
+        child_config_path.write_text(json.dumps(cfg, indent=2) + "\n")
+        return {"mode": "fresh-by-flag", "parent_checkpoint": None,
+                "relative": None, "iteration": None}
+
+    latest = openevolve_latest_checkpoint(source_dir)
+    if latest is None:
+        openevolve["checkpoint_resume"] = None
+        child_config_path.write_text(json.dumps(cfg, indent=2) + "\n")
+        return {"mode": "fresh-no-parent-db", "parent_checkpoint": None,
+                "relative": None, "iteration": None}
+
+    iteration, ckpt_path = latest
+    child_code_dir = exp_dir / "code"
+    relative = Path(os.path.relpath(ckpt_path, child_code_dir)).as_posix()
+    openevolve["checkpoint_resume"] = relative
+    child_config_path.write_text(json.dumps(cfg, indent=2) + "\n")
+    return {"mode": "inherited", "parent_checkpoint": ckpt_path,
+            "relative": relative, "iteration": iteration}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--experiments-root", type=Path, default=None,
@@ -282,6 +372,16 @@ def main() -> int:
                          "parent's description is kept verbatim — pass this when "
                          "the child needs a distinct one-line description (e.g. "
                          "'exp-XXXX sibling: <delta>').")
+    ap.add_argument("--new-openevolve-database", action="store_true",
+                    help="(evolve variant only) Skip inheriting the source's "
+                         "openevolve database. By default the child's "
+                         "`run_config.json:openevolve.checkpoint_resume` is "
+                         "set to the source's latest `checkpoint_N/` so the "
+                         "MAP-Elites search continues seeded from the parent. "
+                         "Pass this flag when the counterfactual delta "
+                         "invalidates the parent's search state (e.g. swapping "
+                         "initial_program.py, changing the evaluator contract, "
+                         "or restructuring config.yaml's database block).")
     args = ap.parse_args()
 
     if args.experiments_root is not None:
@@ -480,6 +580,21 @@ def main() -> int:
                 if id_refs:
                     extra_json_id_refs[json_path.relative_to(exp_dir)] = id_refs
 
+    # 7. Evolve-variant: inherit (or refuse to inherit) the parent's
+    #    openevolve database. By default the child's
+    #    `openevolve.checkpoint_resume` is set to the source's latest
+    #    `checkpoint_N/` directory, written as a relative path from the
+    #    child's `code/` (where run_experiment.py resolves paths). The
+    #    --new-openevolve-database flag opts out (leaves null).
+    openevolve_db_report = None
+    if variant == "evolve":
+        openevolve_db_report = _inherit_openevolve_db(
+            exp_dir=exp_dir,
+            source_dir=source_dir,
+            new_database=args.new_openevolve_database,
+            root=root,
+        )
+
     rel = exp_dir.relative_to(root)
     print(f"Branched {args.source} -> {exp_id} at {rel}")
     print(f"  branched_at: {branched_at}")
@@ -548,8 +663,22 @@ def main() -> int:
                     print(f"    review {dotted}: {_trim(value)} -> suggestion {_trim(suggested)}")
                 else:
                     print(f"    review {dotted}: {_trim(value)} (deliberate reference?)")
+    if openevolve_db_report is not None:
+        print()
+        _print_openevolve_db_report(openevolve_db_report, source_dir=source_dir,
+                                    exp_dir=exp_dir, root=root)
     print()
     print("Reminders before launch:")
+    if openevolve_db_report is not None:
+        print(f"  0. ACP server (required by the default config.yaml): start it from")
+        print(f"     this project root before launching the experiment, e.g.")
+        print(f'         "$SKILL_MANAGER_HOME/skills/acp-cdc-ai-python/scripts/start-server.py" \\')
+        print(f"             --project-root {root} \\")
+        print(f"             --host 127.0.0.1 --port 8000")
+        print(f"     `code/run_experiment.py` probes")
+        print(f"     `<project-root>/.acp-server/server.json` at launch and refuses")
+        print(f"     to run if the server is missing. See SKILL.md > 'Prerequisite:")
+        print(f"     the ACP-backed OpenAI-compatible server' for the full rationale.")
     print(f"  1. Inherited config audit (see SKILL.md > 'Inherited config audit'):")
     print(f"     - For each 'parent-identity reference' listed above, decide")
     print(f"       rewrite vs. keep and apply directly to run_config.json.")

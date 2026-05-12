@@ -2688,6 +2688,7 @@ Concrete markdown templates for every required file live in `references/template
 - `evolve/code-initial-program.py` → `code/initial_program.py` (seed with EVOLVE-BLOCK markers)
 - `evolve/code-evaluator.py` → `code/evaluator.py` (the openevolve fitness function)
 - `evolve/code-config.yaml` → `code/config.yaml` (openevolve config)
+- `evolve/code-openevolve-db.py` → `code/openevolve_db.py` (database inspector; `uv run openevolve-db status|latest-checkpoint|list`)
 - `evolve/artifacts-agents.md` → `artifacts/AGENTS.md` (variant-specific override)
 - `tools-python-exp-pyproject.toml` → `tools/python_exp/pyproject.toml` (written by `init_project.py`)
 - `tools-python-exp-init.py` → `tools/python_exp/src/python_exp/__init__.py` (written by `init_project.py`)
@@ -2720,7 +2721,7 @@ The two variants today:
 | Variant   | Purpose                                                                 | Distinct files in `code/`                                                                |
 |-----------|-------------------------------------------------------------------------|------------------------------------------------------------------------------------------|
 | `default` | Conventional ML run (PyTorch + tensorboard + custom train loop).        | `pyproject.toml`, `run_experiment.py`, `run_config.json`, `check_regressions.py`.        |
-| `evolve`  | OpenEvolve evolutionary loop (LLM mutates a seed program iteratively).  | All of the above plus `initial_program.py`, `evaluator.py`, `config.yaml`. `pyproject.toml` depends on `openevolve` instead of `torch`. |
+| `evolve`  | OpenEvolve evolutionary loop (LLM mutates a seed program iteratively).  | All of the above plus `initial_program.py`, `evaluator.py`, `config.yaml`, `openevolve_db.py`. `pyproject.toml` depends on `openevolve` instead of `torch`, registers an `openevolve-db` console script, and the default `config.yaml`'s `llm.api_base` expects the `acp-cdc-ai-python` skill's local OpenAI-compatible server to be running. |
 
 **Where the variant is stored:**
 
@@ -2777,6 +2778,97 @@ for hyper-experiments:
   `llm.api_base` in `config.yaml` to route to Gemini / a local model /
   OptiLLM / etc.). Never commit the key.
 
+#### Prerequisite: the ACP-backed OpenAI-compatible server
+
+The default `code/config.yaml` points `llm.api_base` at
+`http://localhost:8000/v1` and names a `CLAUDE_*` model. That endpoint
+is **not OpenAI** — it is the local OpenAI-compatible HTTP server
+provided by the **`acp-cdc-ai-python`** skill, which proxies
+chat-completion requests onto an Agent Client Protocol (ACP) wrapper
+around `claude code` (or `codex` / a local Ollama daemon, depending
+on the model prefix — `CLAUDE_*` / `OPEN_AI_*` / `OLLAMA_*`).
+
+This skill declares `acp-cdc-ai-python` as a `skill_references` entry
+in `skill-manager.toml`, so installing hyper-experiments via
+skill-manager pulls it transitively. Before launching ANY evolve
+experiment that uses the default `api_base`, start the server via the
+skill's CLI (do NOT hand-launch the underlying Python entry point —
+the launcher resolves `uv`, runs `uv sync --extra server`, picks a
+free port, and writes a server-info file the experiment can probe):
+
+```bash
+# Run from the project root (the dir containing hyper-experiments.md).
+"$SKILL_MANAGER_HOME/skills/acp-cdc-ai-python/scripts/start-server.py" \
+    --project-root . \
+    --host 127.0.0.1 --port 8000 \
+    --log-dir ./.acp-server/logs
+```
+
+The launcher writes `<project-root>/.acp-server/server.json` with the
+live `host`, `port`, and `pid`. `code/run_experiment.py` probes this
+file before importing openevolve and exits with a helpful error if it
+is missing or stale — keeping `OPENAI_API_KEY` set to the local
+sentinel is not enough on its own; the server must actually be up.
+
+Re-point `llm.api_base` to a real OpenAI/Anthropic/Gemini endpoint
+when you want to bypass the local ACP layer; then a real
+`OPENAI_API_KEY` is required and the ACP server is not. The local
+path is the default because it routes every evolve experiment through
+the same chain-of-custody-safe wrapper and keeps API spend on the
+operator's existing CLI subscription rather than per-token billing.
+
+#### OpenEvolve database — one per experiment, shareable on branch
+
+OpenEvolve persists its MAP-Elites search state to disk (the "database":
+population, archive, per-island state, candidate programs and their
+metrics). The database lives under
+`<exp>/logs/openevolve_output/` — pointed at by
+`paths.openevolve_output` in `run_config.json`. Each experiment's
+database is isolated to its own directory by construction:
+
+- **`new_experiment.py` (--variant evolve)** — the new experiment
+  gets its **own empty database**. `openevolve.checkpoint_resume` is
+  `null`; the openevolve loop starts fresh, scores the seed program
+  as iteration 0, and writes checkpoints into the experiment's own
+  `logs/openevolve_output/` at `checkpoint_interval` (see
+  `config.yaml`). Never point a fresh experiment's
+  `paths.openevolve_output` at another experiment's directory —
+  concurrent writes silently corrupt both databases.
+- **`branch_experiment.py`** — the child **inherits the parent's
+  database by default**: the script discovers the parent's latest
+  `checkpoint_N` directory under
+  `<parent>/logs/openevolve_output/` and writes that path into the
+  child's `run_config.json` as `openevolve.checkpoint_resume`. On
+  launch, the child loads the parent's MAP-Elites state and continues
+  the search from there, writing new checkpoints into its own
+  `logs/openevolve_output/`. The two databases stay physically
+  separate; "inherits" means "starts seeded from", not "shares the
+  same files".
+- **`branch_experiment.py --new-openevolve-database`** — opt out of
+  the inheritance: `checkpoint_resume` is left `null` and the child
+  starts a fresh database, the same way `new_experiment.py` does.
+  Use this when the counterfactual delta invalidates the parent's
+  search state (e.g. swapping `initial_program.py`, changing the
+  evaluator contract, or restructuring `config.yaml`'s database
+  block) — resuming under those conditions silently mixes states
+  that came from different fitness landscapes.
+
+The skill ships a small `openevolve-db` CLI inside every evolve
+experiment's `code/` (via `code/openevolve_db.py`, registered as a
+console script in `code/pyproject.toml`):
+
+```bash
+# Inside an experiment's code/ directory:
+uv run openevolve-db status              # database path + latest checkpoint
+uv run openevolve-db latest-checkpoint   # absolute path to highest-numbered ckpt
+uv run openevolve-db list                # all checkpoints in order
+```
+
+`branch_experiment.py` uses the same discovery logic to find the
+parent's latest checkpoint at branch time. The CLI is also how an
+agent should answer "where is this experiment's database?" without
+spelunking the directory tree.
+
 ### Counterfactual deltas in an evolve experiment
 
 The "delta vs. parent" can land in any of these places — all of them
@@ -2790,6 +2882,7 @@ are legitimate counterfactual subjects:
 | `evaluator.py` (fitness function)          | new metric, different cascade threshold       |
 | `initial_program.py` seed                  | different starting algorithm                  |
 | `run_config.json` openevolve.iterations    | longer / shorter search budget                |
+| `run_config.json` openevolve.checkpoint_resume | fresh-vs-inherited MAP-Elites state (branch: default inherit; pass `--new-openevolve-database` to start fresh) |
 
 Whatever changed must be visible in `plan.md`'s "Counterfactual delta"
 and audited in the "Inherited config audit" block (when branching) so

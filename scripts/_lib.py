@@ -16,6 +16,40 @@ EXP_ID_RE = re.compile(r"^exp-(\d{4})")
 VALID_VARIANTS = ("default", "evolve")
 DEFAULT_VARIANT = "default"
 
+# OpenEvolve writes its MAP-Elites database into per-experiment
+# `<exp>/logs/openevolve_output/`, with snapshots saved as
+# `checkpoint_<N>/` subdirectories at the `checkpoint_interval`
+# declared in `code/config.yaml`. The default path is mirrored in the
+# evolve `run_config.json` template at `paths.openevolve_output`.
+OPENEVOLVE_DB_REL = Path("logs/openevolve_output")
+_OPENEVOLVE_CHECKPOINT_RE = re.compile(r"^checkpoint_(\d+)$")
+
+
+def openevolve_db_dir(exp_dir: Path) -> Path:
+    """Return the openevolve database directory for `exp_dir`."""
+    return exp_dir / OPENEVOLVE_DB_REL
+
+
+def openevolve_latest_checkpoint(exp_dir: Path):
+    """Return (iteration, absolute_path) for the highest-numbered
+    openevolve checkpoint under `exp_dir/logs/openevolve_output/`, or
+    None if the database is empty / missing.
+    """
+    db_dir = openevolve_db_dir(exp_dir)
+    if not db_dir.is_dir():
+        return None
+    best: tuple[int, Path] | None = None
+    for child in db_dir.iterdir():
+        if not child.is_dir():
+            continue
+        m = _OPENEVOLVE_CHECKPOINT_RE.match(child.name)
+        if not m:
+            continue
+        n = int(m.group(1))
+        if best is None or n > best[0]:
+            best = (n, child)
+    return best
+
 
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

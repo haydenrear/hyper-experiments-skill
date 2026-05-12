@@ -81,6 +81,7 @@ EXTRA_CODE_FILES_BY_VARIANT = {
         "code/initial_program.py": "code-initial-program.py",
         "code/evaluator.py": "code-evaluator.py",
         "code/config.yaml": "code-config.yaml",
+        "code/openevolve_db.py": "code-openevolve-db.py",
     },
 }
 
@@ -134,6 +135,46 @@ def _print_smoke_report(exp_dir: Path, rel: Path, variant: str) -> int:
             print(f"    - {path}")
     print()
     return 0
+
+
+def _print_evolve_preflight(root: Path, rel: Path) -> None:
+    """Print the evolve-variant prerequisites: the ACP-backed
+    OpenAI-compatible server (from the `acp-cdc-ai-python` skill) and
+    this experiment's database location. New experiments get their
+    own empty database; branching is what inherits a parent's.
+    """
+    print("Evolve-variant prerequisites:")
+    print("  1. ACP server (required by the default config.yaml).")
+    print("     The default config.yaml points `llm.api_base` at the")
+    print("     local OpenAI-compatible server provided by the")
+    print("     `acp-cdc-ai-python` skill (a skill_reference of")
+    print("     hyper-experiments). Start it from this project root")
+    print("     before launching the experiment:")
+    print()
+    print('       "$SKILL_MANAGER_HOME/skills/acp-cdc-ai-python/scripts/start-server.py" \\')
+    print(f"           --project-root {root} \\")
+    print("           --host 127.0.0.1 --port 8000 \\")
+    print("           --log-dir ./.acp-server/logs")
+    print()
+    print("     The launcher drops `<project-root>/.acp-server/server.json`;")
+    print("     `code/run_experiment.py` probes that file at launch and")
+    print("     refuses to start if the server is missing or stale.")
+    print("     See SKILL.md > 'Prerequisite: the ACP-backed")
+    print("     OpenAI-compatible server' for the full rationale.")
+    print()
+    print("  2. OpenEvolve database — this experiment owns its own.")
+    print(f"     Database path:     {rel}/logs/openevolve_output/")
+    print("     checkpoint_resume: null (fresh database; the seed program")
+    print("                        is scored as iteration 0 by openevolve).")
+    print("     Inspect with:      `uv run openevolve-db status` from")
+    print(f"                        inside {rel}/code/.")
+    print("     Do NOT point `paths.openevolve_output` at another")
+    print("     experiment's directory — concurrent writes corrupt both.")
+    print("     To resume from an existing experiment's database, branch")
+    print("     it with `branch_experiment.py` instead (which seeds the")
+    print("     child's `openevolve.checkpoint_resume` from the parent's")
+    print("     latest checkpoint by default).")
+    print()
 
 
 def _print_run_config_report(report, parent_id):
@@ -348,6 +389,8 @@ def main() -> int:
     if args.smoke:
         if _print_smoke_report(exp_dir, rel, variant) != 0:
             return 1
+    if variant == "evolve":
+        _print_evolve_preflight(root, rel)
     print("Next steps:")
     print(f"  1. Fill in decision policy and measurement plan in {rel}/plan.md")
     print(f"  2. Complete {rel}/index.md (continue/stop/branch criteria, key signals)")

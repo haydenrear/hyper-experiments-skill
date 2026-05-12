@@ -20,8 +20,44 @@ config / prompt / seed).
   config edit.
 - `uv run check-regressions` — verifies the openevolve API and the
   vendored `python_exp` still satisfy this experiment's contract.
+- `uv run openevolve-db status` — prints this experiment's database
+  path and the latest checkpoint. `uv run openevolve-db
+  latest-checkpoint` prints the absolute path of the
+  highest-numbered checkpoint (used when branching).
 - TODO — which evolution checkpoints to inspect; how to compare best
   programs across siblings (path: `<exp>/logs/openevolve_output/`).
+
+## Preflight before launch
+
+1. **ACP server must be running.** The default `config.yaml` points
+   `llm.api_base` at `http://localhost:8000/v1`, which is the
+   OpenAI-compatible HTTP server provided by the
+   **`acp-cdc-ai-python`** skill (a transitive skill_reference of
+   hyper-experiments). Start it from the project root with the
+   skill's launcher — never hand-launch the inner Python entry
+   point:
+   ```bash
+   "$SKILL_MANAGER_HOME/skills/acp-cdc-ai-python/scripts/start-server.py" \
+       --project-root . --host 127.0.0.1 --port 8000 \
+       --log-dir ./.acp-server/logs
+   ```
+   The launcher writes `<project-root>/.acp-server/server.json`;
+   `run_experiment.py` probes that file and refuses to launch the
+   evolutionary loop if the server is missing or its pid is dead.
+   See SKILL.md > "Prerequisite: the ACP-backed OpenAI-compatible
+   server" for the full rationale (chain-of-custody, why the model
+   string carries the `CLAUDE_*` prefix, how to re-point at a paid
+   provider).
+2. **Database policy.** This experiment's openevolve database lives
+   at `logs/openevolve_output/` and is isolated from every other
+   experiment's database. `run_config.json`'s
+   `openevolve.checkpoint_resume` determines the starting state:
+   `null` = fresh database (scaffolded experiments); a path under a
+   parent's `logs/openevolve_output/checkpoint_N` = resume from the
+   parent's MAP-Elites state (branched experiments default to this,
+   unless the operator passed `--new-openevolve-database`). Confirm
+   this choice is intentional during the inherited-config audit
+   before the freeze commit.
 
 ## Boundaries
 - Do **not** invoke `python` or `python3` directly inside this experiment —

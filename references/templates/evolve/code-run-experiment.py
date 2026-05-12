@@ -30,6 +30,23 @@ Required environment:
                         # of the box. Override with a real key when
                         # `api_base` points at a paid provider.
 
+Required service (only when api_base is local):
+
+    The default `config.yaml` points at the ACP-backed
+    OpenAI-compatible HTTP server provided by the
+    `acp-cdc-ai-python` skill (a transitive skill_reference of
+    hyper-experiments). Start it from the project root before
+    launching this experiment:
+
+        "$SKILL_MANAGER_HOME/skills/acp-cdc-ai-python/scripts/start-server.py" \
+            --project-root <project-root> \
+            --host 127.0.0.1 --port 8000
+
+    The launcher writes `<project-root>/.acp-server/server.json`
+    with `host`, `port`, and `pid`. This script probes that file
+    before importing openevolve and exits non-zero with a hint
+    when the file is missing or the recorded pid is dead.
+
 `run_baselines()` runs before the evolutionary search and is a no-op by
 default — see `run_experiment.py` (default variant) and SKILL.md for the
 when/how. For an evolve experiment, a "baseline" usually means the seed
@@ -62,6 +79,14 @@ RUN_CONFIG_PATH = CODE_DIR / "run_config.json"
 # soft-default rather than an error. Real (paid) providers still
 # require the user to export a real key.
 LOCAL_API_BASE_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0")
+
+# Marker file the `acp-cdc-ai-python` skill's launcher drops at the
+# project root every time it starts. Lets us probe whether the server
+# the default `config.yaml` expects is actually up without making a
+# network call. Resolution walks up from the experiment's `code/` dir
+# until it finds `hyper-experiments.md` (the project root marker).
+ACP_SERVER_INFO_FILENAME = ".acp-server/server.json"
+PROJECT_ROOT_MARKER = "hyper-experiments.md"
 
 
 def load_run_config() -> dict:
@@ -105,6 +130,78 @@ def _smoke_check(oe_cfg: dict) -> int:
     return 0
 
 
+def _find_project_root(start: Path) -> Path | None:
+    """Walk up from `start` looking for `hyper-experiments.md`."""
+    for candidate in (start, *start.parents):
+        if (candidate / PROJECT_ROOT_MARKER).exists():
+            return candidate
+    return None
+
+
+def _api_base_is_local(api_base: str | None) -> bool:
+    if not api_base:
+        return False
+    return any(host in api_base for host in LOCAL_API_BASE_HOSTS)
+
+
+def _check_acp_server(api_base: str | None) -> int:
+    """When `api_base` is local, verify the ACP-backed server is up.
+
+    Reads `<project-root>/.acp-server/server.json` (written by the
+    `acp-cdc-ai-python` skill's launcher) and probes the recorded pid
+    with signal-0. Returns 0 if the server looks live (or if the
+    `api_base` is remote — nothing to check), non-zero with a helpful
+    error otherwise.
+    """
+    if not _api_base_is_local(api_base):
+        return 0
+    project_root = _find_project_root(CODE_DIR)
+    if project_root is None:
+        print("warning: could not locate hyper-experiments.md to find "
+              "the project root; skipping ACP-server preflight.",
+              file=sys.stderr)
+        return 0
+    info_path = project_root / ACP_SERVER_INFO_FILENAME
+    if not info_path.exists():
+        print(
+            f"error: api_base={api_base!r} expects the local ACP-backed "
+            "OpenAI-compatible server to be running, but "
+            f"{info_path} is missing.\n"
+            "       Start it from the project root with the "
+            "`acp-cdc-ai-python` skill's launcher:\n"
+            "           \"$SKILL_MANAGER_HOME/skills/acp-cdc-ai-python/"
+            "scripts/start-server.py\" \\\n"
+            f"               --project-root {project_root} \\\n"
+            "               --host 127.0.0.1 --port 8000\n"
+            "       See SKILL.md > 'Prerequisite: the ACP-backed "
+            "OpenAI-compatible server' for the full rationale.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        info = json.loads(info_path.read_text())
+        pid = int(info["pid"])
+    except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
+        print(f"error: {info_path} exists but is unparseable ({e}). "
+              "Stop the launcher and start it again.", file=sys.stderr)
+        return 1
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        print(f"error: ACP-server marker at {info_path} points at "
+              f"pid={pid}, which is no longer running. Restart the "
+              "server with the launcher (see SKILL.md).", file=sys.stderr)
+        return 1
+    except PermissionError:
+        # The process exists but is owned by another user — treat as
+        # live (we couldn't have spawned it, but signal-0 still proves
+        # presence).
+        pass
+    print(f"openevolve: ACP server preflight OK "
+          f"(host={info.get('host')!r} port={info.get('port')!r} pid={pid}).")
+    return 0
+
+
 def _ensure_api_key_for_local(api_base: str | None) -> None:
     """Default `OPENAI_API_KEY` to a sentinel when api_base points at a
     local server and no key is set. Local OpenAI-compatible servers
@@ -135,7 +232,10 @@ async def _run_evolution(run_config: dict) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     cfg = load_config(str(config_path))
-    _ensure_api_key_for_local(getattr(cfg.llm, "api_base", None))
+    api_base = getattr(cfg.llm, "api_base", None)
+    if _check_acp_server(api_base) != 0:
+        return 1
+    _ensure_api_key_for_local(api_base)
     iterations = oe_cfg.get("iterations") or cfg.max_iterations
     target_score = oe_cfg.get("target_score")
     checkpoint = oe_cfg.get("checkpoint_resume")
