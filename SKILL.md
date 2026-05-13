@@ -2689,6 +2689,7 @@ Concrete markdown templates for every required file live in `references/template
 - `evolve/code-evaluator.py` → `code/evaluator.py` (the openevolve fitness function)
 - `evolve/code-config.yaml` → `code/config.yaml` (openevolve config)
 - `evolve/code-openevolve-db.py` → `code/openevolve_db.py` (database inspector; `uv run openevolve-db status|latest-checkpoint|list`)
+- `evolve/code-prompt-templates-diff_user.txt` → `code/prompt-templates/diff_user.txt` (strict diff-only mutation prompt)
 - `evolve/artifacts-agents.md` → `artifacts/AGENTS.md` (variant-specific override)
 - `tools-python-exp-pyproject.toml` → `tools/python_exp/pyproject.toml` (written by `init_project.py`)
 - `tools-python-exp-init.py` → `tools/python_exp/src/python_exp/__init__.py` (written by `init_project.py`)
@@ -2767,6 +2768,12 @@ for hyper-experiments:
   system message, MAP-Elites database parameters, evaluator
   thresholds. The system message is the most important knob — iterate
   on it explicitly and treat changes as their own counterfactual delta.
+  Evolve experiments also ship `code/prompt-templates/diff_user.txt`,
+  which overrides OpenEvolve's default diff prompt with a strict
+  "return only diff blocks; do not use write tools" contract for
+  ACP-backed coding agents. `code/config.yaml` sets `diff_pattern` to
+  match that template. Keep both the output contract and marker format
+  intact when customizing the experiment prompt.
 - **Run config** (`code/run_config.json`): hyper-experiments-side state
   (paths, parent identity, `openevolve.config_file` /
   `openevolve.initial_program` / `openevolve.evaluator` /

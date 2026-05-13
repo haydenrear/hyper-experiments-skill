@@ -78,6 +78,11 @@ config / prompt / seed).
   specific seed + evaluator + config; mutating any of them mid-run
   silently corrupts the lineage of every program in the database. If a
   change is needed, create a child experiment.
+- Do **not** weaken the mutation-agent output contract in
+  `code/config.yaml` or `code/prompt-templates/diff_user.txt`.
+  ACP-backed coding agents must return only OpenEvolve diff blocks
+  matching `diff_pattern`. They must not call write/edit/patch/shell
+  tools, create `main.py`, or create alternate source files.
 - Do **not** edit `code/` or `data/generation-scripts/` after launch. If a
   change is needed, create a child experiment. See
   `references/chain-of-custody.md`.

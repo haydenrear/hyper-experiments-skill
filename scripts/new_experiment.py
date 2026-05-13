@@ -83,6 +83,7 @@ EXTRA_CODE_FILES_BY_VARIANT = {
         "code/evaluator.py": "code-evaluator.py",
         "code/config.yaml": "code-config.yaml",
         "code/openevolve_db.py": "code-openevolve-db.py",
+        "code/prompt-templates/diff_user.txt": "code-prompt-templates-diff_user.txt",
     },
 }
 
@@ -170,6 +171,8 @@ def _print_evolve_preflight(root: Path, rel: Path) -> None:
     print("     missing or stale.")
     print("     JSONL traces:      data/acp-openai-server/jsonl/")
     print("     server stdout/err: data/acp-openai-server/process/")
+    print("     Mutation prompt:   code/prompt-templates/diff_user.txt")
+    print("                        enforces diff-only/no-write-tools output.")
     print("     See SKILL.md > 'Prerequisite: the ACP-backed")
     print("     OpenAI-compatible server' for the full rationale.")
     print()
@@ -367,6 +370,7 @@ def main() -> int:
             render_template(load_template(tmpl_name, variant=variant), vars_)
         )
     for out_name, tmpl_name in EXTRA_CODE_FILES_BY_VARIANT.get(variant, {}).items():
+        (exp_dir / out_name).parent.mkdir(parents=True, exist_ok=True)
         (exp_dir / out_name).write_text(
             render_template(load_template(tmpl_name, variant=variant), vars_)
         )

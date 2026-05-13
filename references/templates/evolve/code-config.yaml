@@ -46,12 +46,22 @@ llm:
 # System message — the most important knob. See the openevolve README's
 # "Crafting Effective System Messages" section. Iterate on this prompt
 # explicitly; treat changes to it as a counterfactual delta in their
-# own right.
+# own right. `template_dir` overrides OpenEvolve's default diff prompt
+# so ACP-backed coding agents return only parseable diff blocks and do
+# not use write tools. Keep `diff_pattern` below in sync with that file.
 prompt:
+  template_dir: prompt-templates
   system_message: |
     You are an expert programmer working on the {{family}} family of
     experiments. Your task is to improve the seed program for
     {{experiment_id}} ({{title}}).
+
+    You are running inside an OpenEvolve mutation loop. You must return
+    only the diff blocks requested by the user message.
+    Do not call write, edit, patch, shell, file-creation, or other
+    project-modification tools. Do not create `main.py`, source files,
+    notes, scripts, or artifacts. Do not include prose, markdown fences,
+    plans, explanations, or full rewritten files in your response.
 
     TODO: replace this placeholder with the experiment-specific
     guidance. Include:
@@ -80,4 +90,5 @@ evaluator:
 # Evolution mode: diff_based_evolution=true means the LLM emits diffs
 # (cheaper, smaller mutations); false = full rewrites.
 diff_based_evolution: true
+diff_pattern: '<<< SEARCH\n(.*?)--- REPLACE\n(.*?)>>> END'
 max_code_length: 20000

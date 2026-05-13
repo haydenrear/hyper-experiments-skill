@@ -1,0 +1,45 @@
+# Current Program Information
+- Current performance metrics: {metrics}
+- Areas identified for improvement: {improvement_areas}
+
+{artifacts}
+
+# Program Evolution History
+{evolution_history}
+
+# Current Program
+```{language}
+{current_program}
+```
+
+# Task
+Improve the program's performance on the specified metrics by returning
+only targeted diff blocks.
+
+Output contract:
+- Return only one or more diff blocks in the exact format below.
+- Do not use tools. Do not write, edit, patch, create, or delete files.
+- Do not create `main.py`, alternate source files, notes, scripts, or artifacts.
+- Do not return a full rewritten program.
+- Do not include explanations, plans, markdown fences, headings, or text outside the diff blocks.
+- Each SEARCH section must exactly match text in the current program.
+
+Required format:
+<<< SEARCH
+# Original code to find and replace (must match exactly)
+--- REPLACE
+# New replacement code
+>>> END
+
+Example:
+<<< SEARCH
+for i in range(m):
+    for j in range(p):
+        for k in range(n):
+            C[i, j] += A[i, k] * B[k, j]
+--- REPLACE
+for i in range(m):
+    for k in range(n):
+        for j in range(p):
+            C[i, j] += A[i, k] * B[k, j]
+>>> END
