@@ -22,6 +22,18 @@ skill_references = [
 spec = "pip:tb-query"
 on_path = "tb-query"
 
+[[cli_dependencies]]
+spec = "npm:@google/gemini-cli"
+on_path = "gemini"
+
+[[cli_dependencies]]
+spec = "brew:claude"
+on_path = "claude"
+
+[[cli_dependencies]]
+spec = "brew:codex"
+on_path = "codex"
+
 # MCP servers the skill registers via the gateway. skill-manager wires each
 # entry into the virtual MCP gateway at install time; agents only ever see
 # the gateway endpoint, never the raw downstream server.

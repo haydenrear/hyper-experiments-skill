@@ -1,0 +1,160 @@
+name: OpenEvolve Gemini Test Graph
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/openevolve-gemini-test-graph.yml"
+      - "SKILL.md"
+      - "scripts/**"
+      - "references/**"
+      - "test_graph/**"
+      - "skill-manager.toml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/openevolve-gemini-test-graph.yml"
+      - "SKILL.md"
+      - "scripts/**"
+      - "references/**"
+      - "test_graph/**"
+      - "skill-manager.toml"
+
+permissions:
+  contents: read
+
+jobs:
+  openevolve-gemini-smoke:
+    name: OpenEvolve Gemini smoke
+    runs-on: macos-latest
+    timeout-minutes: 75
+
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      SKILL_MANAGER_HOME: /Users/hayde/.skill-manager
+      HYPER_EXPERIMENTS_SKILL_HOME: ${{ github.workspace }}
+      ACP_CDC_AI_PYTHON_SKILL_HOME: /Users/hayde/.skill-manager/skills/acp-cdc-ai-python
+      TEST_GRAPH_OPENEVOLVE_RUN_TIMEOUT: "300"
+      TEST_GRAPH_OPENEVOLVE_ITERATIONS: "1"
+      TEST_GRAPH_OPENEVOLVE_DEFAULT_COOLDOWN_SECONDS: "300"
+      TEST_GRAPH_GEMINI_MODELS: "GEMINI_gemini-2.5-pro,GEMINI_gemini-2.5-flash"
+      OPENEVOLVE_MODEL_COOLDOWN_ON_ALL_UNAVAILABLE: "raise"
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_GENAI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      SKILL_MANAGER_GITHUB_TOKEN: ${{ secrets.SKILL_MANAGER_GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.SKILL_MANAGER_GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.SKILL_MANAGER_GITHUB_TOKEN }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check required secrets
+        run: |
+          if [ -z "${GEMINI_API_KEY:-}" ]; then
+            echo "::error::Missing GEMINI_API_KEY repository secret for the Gemini CLI."
+            exit 1
+          fi
+          if [ -z "${SKILL_MANAGER_GITHUB_TOKEN:-}" ]; then
+            echo "::error::Missing SKILL_MANAGER_GITHUB_TOKEN repository secret for private skill installs."
+            exit 1
+          fi
+
+      - name: Prepare fixed skill-manager home for scaffold symlinks
+        run: |
+          sudo mkdir -p "$SKILL_MANAGER_HOME"
+          sudo chown -R "$USER":"$(id -gn)" /Users/hayde
+          echo "$SKILL_MANAGER_HOME/bin/cli" >> "$GITHUB_PATH"
+          echo "$SKILL_MANAGER_HOME/pm/uv/current/bin" >> "$GITHUB_PATH"
+          echo "$SKILL_MANAGER_HOME/pm/node/current/bin" >> "$GITHUB_PATH"
+
+      - name: Validate GitHub auth for private skill installs
+        run: |
+          gh repo view haydenrear/acp-cdc-ai-python --json nameWithOwner,visibility
+
+      - name: Restore dependency caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.jbang
+            ~/.npm
+            ~/.cache/uv
+            ~/Library/Caches/uv
+            /Users/hayde/.skill-manager/pm
+            /Users/hayde/.skill-manager/npm
+            /Users/hayde/.skill-manager/bin/cli
+          key: ${{ runner.os }}-openevolve-gemini-deps-${{ hashFiles('test_graph/gradle/wrapper/gradle-wrapper.properties', 'test_graph/**/*.gradle.kts', '.github/workflows/openevolve-gemini-test-graph.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-openevolve-gemini-deps-
+
+      - name: Install Homebrew packages
+        run: |
+          brew tap haydenrear/skill-manager
+          if brew list skill-manager >/dev/null 2>&1; then
+            brew upgrade haydenrear/skill-manager/skill-manager || true
+          else
+            brew install haydenrear/skill-manager/skill-manager
+          fi
+          if brew list jbang >/dev/null 2>&1; then
+            brew upgrade jbang || true
+          else
+            brew install jbang
+          fi
+          if brew list python@3.13 >/dev/null 2>&1; then
+            brew upgrade python@3.13 || true
+          else
+            brew install python@3.13
+          fi
+          PYTHON_313="$(brew --prefix python@3.13)/bin/python3.13"
+          echo "UV_PYTHON=$PYTHON_313" >> "$GITHUB_ENV"
+          echo "$(brew --prefix python@3.13)/bin" >> "$GITHUB_PATH"
+          skill-manager --help >/dev/null
+          jbang --version
+          "$PYTHON_313" --version
+
+      - name: Install test-graph skill
+        run: |
+          skill-manager install -y github:haydenrear/test_graph_skill
+
+      - name: Clone private ACP OpenAI-compatible server skill
+        run: |
+          rm -rf "$RUNNER_TEMP/acp-cdc-ai-python"
+          gh repo clone haydenrear/acp-cdc-ai-python-skill "$RUNNER_TEMP/acp-cdc-ai-python" -- --depth 1
+
+      - name: Install ACP OpenAI-compatible server skill
+        run: |
+          skill-manager onboard
+          skill-manager install -y "file:$RUNNER_TEMP/acp-cdc-ai-python"
+          skill-manager sync
+          "$SKILL_MANAGER_HOME/skills/skill-manager/scripts/env.sh" --skills acp-cdc-ai-python --pretty
+          skill-manager list
+          command -v gemini
+          gemini --version
+
+      - name: Validate scaffold symlinks resolve to skill-manager installs
+        run: |
+          test "$(readlink test_graph/sdk)" = "$SKILL_MANAGER_HOME/skills/test-graph/project_sdk_sources/sdk"
+          test "$(readlink test_graph/build-logic)" = "$SKILL_MANAGER_HOME/skills/test-graph/project_sdk_sources/build-logic"
+          test -d "$SKILL_MANAGER_HOME/skills/test-graph/project_sdk_sources/sdk"
+          test -x "$ACP_CDC_AI_PYTHON_SKILL_HOME/scripts/start-server.py"
+
+      - name: Discover and plan test graph
+        run: |
+          "$SKILL_MANAGER_HOME/skills/test-graph/scripts/discover.py"
+          "$SKILL_MANAGER_HOME/skills/test-graph/scripts/discover.py" openevolveGeminiSmoke
+
+      - name: Run OpenEvolve Gemini test graph
+        working-directory: test_graph
+        run: |
+          "$SKILL_MANAGER_HOME/skills/test-graph/scripts/run.py" openevolveGeminiSmoke
+
+      - name: Upload validation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openevolve-gemini-validation-reports
+          path: test_graph/build/validation-reports/

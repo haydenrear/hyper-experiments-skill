@@ -2688,6 +2688,7 @@ Concrete markdown templates for every required file live in `references/template
 - `evolve/code-initial-program.py` → `code/initial_program.py` (seed with EVOLVE-BLOCK markers)
 - `evolve/code-evaluator.py` → `code/evaluator.py` (the openevolve fitness function)
 - `evolve/code-config.yaml` → `code/config.yaml` (openevolve config)
+- `evolve/code-openevolve-capacity.py` → `code/openevolve_capacity.py` (model-capacity cooldown memory + priority failover)
 - `evolve/code-openevolve-db.py` → `code/openevolve_db.py` (database inspector; `uv run openevolve-db status|latest-checkpoint|list`)
 - `evolve/code-prompt-templates-diff_user.txt` → `code/prompt-templates/diff_user.txt` (strict diff-only mutation prompt)
 - `evolve/artifacts-agents.md` → `artifacts/AGENTS.md` (variant-specific override)
@@ -2774,6 +2775,21 @@ for hyper-experiments:
   ACP-backed coding agents. `code/config.yaml` sets `diff_pattern` to
   match that template. Keep both the output contract and marker format
   intact when customizing the experiment prompt.
+- **Model-capacity failover** (`code/openevolve_capacity.py`): the
+  `llm.models` list in `code/config.yaml` is treated as priority
+  order. If a model returns an ACP/Google-style quota message like
+  "capacity ... reset after 15h2m49s", the runner records
+  `<experiment>/data/openevolve_model_capacity.json`, skips that model
+  until the parsed reset time, and tries the next configured model. If
+  every model is cooling down, workers sleep until the earliest reset.
+  It also appends events to
+  `<experiment>/data/openevolve_model_capacity_events.jsonl`, including
+  the model, the exhaustion time, the raw error, and the UTC time when
+  the model becomes viable again. If the provider omits an explicit
+  reset duration, the runner uses `OPENEVOLVE_MODEL_COOLDOWN_DEFAULT_SECONDS`
+  (default: 24 hours) as the fallback cooldown. Test graphs can set
+  `OPENEVOLVE_MODEL_COOLDOWN_ON_ALL_UNAVAILABLE=raise` to record the
+  cooldown and stop instead of sleeping until the next viable model.
 - **Run config** (`code/run_config.json`): hyper-experiments-side state
   (paths, parent identity, `openevolve.config_file` /
   `openevolve.initial_program` / `openevolve.evaluator` /

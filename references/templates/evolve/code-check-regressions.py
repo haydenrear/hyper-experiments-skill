@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import sys
 
+import openevolve_capacity
 import python_exp
 
 
@@ -36,6 +37,9 @@ def check_imports() -> list[str]:
                 problems.append(
                     f"python_exp.hello() returned non-str: {type(result).__name__}"
                 )
+
+    if not hasattr(openevolve_capacity, "install"):
+        problems.append("openevolve_capacity.install is missing")
 
     try:
         import openevolve  # noqa: F401

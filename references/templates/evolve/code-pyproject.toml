@@ -19,7 +19,7 @@ check-regressions = "check_regressions:main"
 openevolve-db = "openevolve_db:main"
 
 [tool.setuptools]
-py-modules = ["run_experiment", "check_regressions", "openevolve_db"]
+py-modules = ["run_experiment", "check_regressions", "openevolve_capacity", "openevolve_db"]
 
 [tool.uv.sources]
 python-exp = { path = "./vendored/python_exp" }
@@ -44,9 +44,10 @@ python-exp = { path = "./vendored/python_exp" }
 # `run_experiment.py`, which loads `config.yaml` (the openevolve
 # config), `initial_program.py` (the seed program with EVOLVE-BLOCK
 # markers), and `evaluator.py` (the evaluation function), then
-# invokes openevolve. Pin a specific `openevolve==<version>` once
-# the evolutionary regime is settled — the prompts and search
-# behavior change between releases.
+# installs `openevolve_capacity.py` (priority failover for provider
+# capacity cooldowns) and invokes openevolve. Pin a specific
+# `openevolve==<version>` once the evolutionary regime is settled —
+# the prompts and search behavior change between releases.
 #
 # LLM API KEY: the openevolve run reads `OPENAI_API_KEY` from the
 # environment regardless of the actual provider (OpenAI, Gemini,

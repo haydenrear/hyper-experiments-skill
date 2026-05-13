@@ -30,14 +30,24 @@ max_iterations: 100
 checkpoint_interval: 10
 random_seed: 42 # full reproducibility — see openevolve README
 
-# LLM ensemble. Adjust weights / models for the counterfactual you are
-# testing. Keep `temperature` and `timeout` consistent across siblings
-# unless the delta is specifically about them.
+# LLM priority list. `code/openevolve_capacity.py` makes OpenEvolve try
+# models in this order. If a model returns an ACP/Google-style exhausted
+# capacity error with a reset duration, the runner records a cooldown in
+# `data/openevolve_model_capacity.json`, skips that model, and tries the
+# next entry until the cooldown expires. `weight` is kept for upstream
+# OpenEvolve compatibility; this scaffold's failover path uses list
+# order as the routing priority.
+#
+# Adjust models for the counterfactual you are testing. Keep
+# `temperature` and `timeout` consistent across siblings unless the delta
+# is specifically about them.
 llm:
-  primary_model: "CLAUDE_claude-sonnet-4-6"
-  primary_model_weight: 0.8
-  secondary_model: "CLAUDE_claude-sonnet-4-6"
-  secondary_model_weight: 0.2
+  models:
+    - name: "CLAUDE_claude-sonnet-4-6"
+      weight: 1.0
+    # Add lower-priority fallback models here, for example:
+    # - name: "GEMINI_gemini-2.5-pro"
+    #   weight: 1.0
   api_base: "http://localhost:8000/v1"
   temperature: 0.7
   max_tokens: 16000

@@ -44,6 +44,7 @@ out/
 ### Build/Runtime ###
 *.class
 *.jar
+!**/gradle/wrapper/gradle-wrapper.jar
 *.log
 .env*
 

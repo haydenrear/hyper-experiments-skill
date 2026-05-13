@@ -24,6 +24,18 @@ config / prompt / seed).
   path and the latest checkpoint. `uv run openevolve-db
   latest-checkpoint` prints the absolute path of the
   highest-numbered checkpoint (used when branching).
+- `data/openevolve_model_capacity.json` — runtime memory for provider
+  capacity cooldowns by model. `code/openevolve_capacity.py` updates
+  this automatically when ACP returns a quota-reset duration and then
+  tries the next model in `config.yaml`'s `llm.models` priority list.
+- `data/openevolve_model_capacity_events.jsonl` — append-only event log
+  for capacity exhaustion, model skips, retry attempts, and "all models
+  cooling down" sleeps, including the UTC time when a model becomes
+  viable again. If the provider omits an explicit reset duration,
+  `OPENEVOLVE_MODEL_COOLDOWN_DEFAULT_SECONDS` controls the fallback
+  cooldown; validation graphs may set
+  `OPENEVOLVE_MODEL_COOLDOWN_ON_ALL_UNAVAILABLE=raise` to stop instead
+  of sleeping until the next model becomes viable.
 - TODO — which evolution checkpoints to inspect; how to compare best
   programs across siblings (path: `<exp>/logs/openevolve_output/`).
 
@@ -83,6 +95,10 @@ config / prompt / seed).
   ACP-backed coding agents must return only OpenEvolve diff blocks
   matching `diff_pattern`. They must not call write/edit/patch/shell
   tools, create `main.py`, or create alternate source files.
+- Keep `code/openevolve_capacity.py` active unless the experiment
+  deliberately tests model-routing behavior. It owns the
+  per-experiment quota cooldown file and priority failover across
+  `llm.models`.
 - Do **not** edit `code/` or `data/generation-scripts/` after launch. If a
   change is needed, create a child experiment. See
   `references/chain-of-custody.md`.

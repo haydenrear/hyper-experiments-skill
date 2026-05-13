@@ -241,9 +241,25 @@ def _ensure_api_key_for_local(api_base: str | None) -> None:
               "real key when pointing at a paid provider).")
 
 
+def _install_model_capacity_failover(run_config: dict) -> Path:
+    """Install per-experiment model cooldown memory for OpenEvolve."""
+    data_dir = _resolve(run_config["paths"]["data"])
+    data_dir.mkdir(parents=True, exist_ok=True)
+    state_path = data_dir / "openevolve_model_capacity.json"
+
+    import openevolve_capacity
+
+    openevolve_capacity.install(state_path)
+    print(f"openevolve: model capacity memory={state_path}")
+    print(f"openevolve: model capacity events={state_path.with_name('openevolve_model_capacity_events.jsonl')}")
+    return state_path
+
+
 async def _run_evolution(run_config: dict) -> int:
     # Imported lazily so the smoke path doesn't pay the openevolve import
     # cost (and so a missing openevolve install only fails the real run).
+    _install_model_capacity_failover(run_config)
+
     from openevolve import OpenEvolve
     from openevolve.config import load_config
 
