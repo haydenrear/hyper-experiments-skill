@@ -82,6 +82,7 @@ EXTRA_CODE_FILES_BY_VARIANT = {
         "code/initial_program.py": "code-initial-program.py",
         "code/evaluator.py": "code-evaluator.py",
         "code/config.yaml": "code-config.yaml",
+        "code/openevolve_capacity.py": "code-openevolve-capacity.py",
         "code/openevolve_db.py": "code-openevolve-db.py",
         "code/prompt-templates/diff_user.txt": "code-prompt-templates-diff_user.txt",
     },
@@ -173,6 +174,10 @@ def _print_evolve_preflight(root: Path, rel: Path) -> None:
     print("     server stdout/err: data/acp-openai-server/process/")
     print("     Mutation prompt:   code/prompt-templates/diff_user.txt")
     print("                        enforces diff-only/no-write-tools output.")
+    print("     Model cooldowns:   data/openevolve_model_capacity.json")
+    print("                        records quota reset times by model.")
+    print("     Cooldown events:   data/openevolve_model_capacity_events.jsonl")
+    print("                        logs exhaustion and viable-again times.")
     print("     See SKILL.md > 'Prerequisite: the ACP-backed")
     print("     OpenAI-compatible server' for the full rationale.")
     print()
