@@ -52,6 +52,7 @@ RUN_CONFIG_OUT = "code/run_config.json"
 
 SUBDIRS = ("code", "logs", "tensorboard", "checkpoints")
 DATA_SUBDIRS = ("generation-scripts", "generated")
+EVOLVE_DATA_SUBDIRS = ("acp-openai-server/jsonl", "acp-openai-server/process")
 FILE_TEMPLATES = {
     "index.md": "experiment-index.md",
     "plan.md": "plan.md",
@@ -148,17 +149,27 @@ def _print_evolve_preflight(root: Path, rel: Path) -> None:
     print("     The default config.yaml points `llm.api_base` at the")
     print("     local OpenAI-compatible server provided by the")
     print("     `acp-cdc-ai-python` skill (a skill_reference of")
-    print("     hyper-experiments). Start it from this project root")
-    print("     before launching the experiment:")
+    print("     hyper-experiments). Start a fresh server for this")
+    print("     experiment before launching it. The launcher root and")
+    print("     logs should be inside this experiment:")
     print()
+    exp_dir = root / rel
+    process_dir = exp_dir / "data/acp-openai-server/process"
+    print(f'       mkdir -p "{process_dir}"')
     print('       "$SKILL_MANAGER_HOME/skills/acp-cdc-ai-python/scripts/start-server.py" \\')
-    print(f"           --project-root {root} \\")
-    print("           --host 127.0.0.1 --port 8000 \\")
-    print("           --log-dir ./.acp-server/logs")
+    print(f'           --project-root "{exp_dir}" \\')
+    print("           --host 127.0.0.1 \\")
+    print("           --log-dir data/acp-openai-server/jsonl \\")
+    print(f'           > "{process_dir}/stdout.log" \\')
+    print(f'           2> "{process_dir}/stderr.log" &')
     print()
-    print("     The launcher drops `<project-root>/.acp-server/server.json`;")
-    print("     `code/run_experiment.py` probes that file at launch and")
-    print("     refuses to start if the server is missing or stale.")
+    print("     The launcher drops this experiment's")
+    print("     `.acp-server/server.json`; `code/run_experiment.py`")
+    print("     probes that file, points OpenEvolve at the recorded")
+    print("     host/port, and refuses to start if the server is")
+    print("     missing or stale.")
+    print("     JSONL traces:      data/acp-openai-server/jsonl/")
+    print("     server stdout/err: data/acp-openai-server/process/")
     print("     See SKILL.md > 'Prerequisite: the ACP-backed")
     print("     OpenAI-compatible server' for the full rationale.")
     print()
@@ -309,6 +320,9 @@ def main() -> int:
     (exp_dir / "data").mkdir()
     for sub in DATA_SUBDIRS:
         (exp_dir / "data" / sub).mkdir()
+    if variant == "evolve":
+        for sub in EVOLVE_DATA_SUBDIRS:
+            (exp_dir / "data" / sub).mkdir(parents=True)
 
     parent_dir_rel = "null"
     if args.parent:

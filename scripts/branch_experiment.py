@@ -403,6 +403,12 @@ def main() -> int:
               f"experiments/families/", file=sys.stderr)
         return 1
 
+    # Variant is inherited from the source experiment — branching is
+    # variant-blind by construction (it deep-copies whatever the parent
+    # had in code/). We just propagate the value into freshly-rendered
+    # templates so e.g. index.md shows the right variant tag and the
+    # same `{{variant}}` placeholder resolves.
+    variant = experiment_variant_from_run_config(source_dir)
     source_family = source_dir.parent.name
     family = args.family or source_family
     parent_id = args.parent or args.source
@@ -451,6 +457,9 @@ def main() -> int:
     (exp_dir / "data" / "generated").mkdir(exist_ok=True)
     _copy_file(source_dir / "data" / "manifest.md",
                exp_dir / "data" / "manifest.md")
+    if variant == "evolve":
+        (exp_dir / "data" / "acp-openai-server" / "jsonl").mkdir(parents=True)
+        (exp_dir / "data" / "acp-openai-server" / "process").mkdir(parents=True)
 
     # 3. Create empty output subdirs.
     for sub in EMPTY_SUBDIRS:
@@ -460,13 +469,6 @@ def main() -> int:
     #    artifacts/*.md with the child's identity + branch provenance.
     branched_at = utcnow_iso()
     iteration_delta_oneline = args.delta[0] if args.delta else "TODO"
-
-    # Variant is inherited from the source experiment — branching is
-    # variant-blind by construction (it deep-copies whatever the parent
-    # had in code/). We just propagate the value into freshly-rendered
-    # templates so e.g. index.md shows the right variant tag and the
-    # same `{{variant}}` placeholder resolves.
-    variant = experiment_variant_from_run_config(source_dir)
 
     vars_ = {
         "experiment_id": exp_id,
@@ -670,14 +672,23 @@ def main() -> int:
     print()
     print("Reminders before launch:")
     if openevolve_db_report is not None:
-        print(f"  0. ACP server (required by the default config.yaml): start it from")
-        print(f"     this project root before launching the experiment, e.g.")
+        process_dir = exp_dir / "data/acp-openai-server/process"
+        print(f"  0. ACP server (required by the default config.yaml): start a")
+        print(f"     fresh server for this experiment before launching it. Keep")
+        print(f"     the launcher root and logs inside the child experiment:")
+        print(f'         mkdir -p "{process_dir}"')
         print(f'         "$SKILL_MANAGER_HOME/skills/acp-cdc-ai-python/scripts/start-server.py" \\')
-        print(f"             --project-root {root} \\")
-        print(f"             --host 127.0.0.1 --port 8000")
+        print(f'             --project-root "{exp_dir}" \\')
+        print(f"             --host 127.0.0.1 \\")
+        print(f"             --log-dir data/acp-openai-server/jsonl \\")
+        print(f'             > "{process_dir}/stdout.log" \\')
+        print(f'             2> "{process_dir}/stderr.log" &')
         print(f"     `code/run_experiment.py` probes")
-        print(f"     `<project-root>/.acp-server/server.json` at launch and refuses")
-        print(f"     to run if the server is missing. See SKILL.md > 'Prerequisite:")
+        print(f"     this experiment's `.acp-server/server.json`, points")
+        print(f"     OpenEvolve at the recorded host/port, and refuses to run if")
+        print(f"     the server is missing. JSONL traces go to")
+        print(f"     `data/acp-openai-server/jsonl/`; stdout/stderr go to")
+        print(f"     `data/acp-openai-server/process/`. See SKILL.md > 'Prerequisite:")
         print(f"     the ACP-backed OpenAI-compatible server' for the full rationale.")
     print(f"  1. Inherited config audit (see SKILL.md > 'Inherited config audit'):")
     print(f"     - For each 'parent-identity reference' listed above, decide")

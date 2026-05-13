@@ -2791,24 +2791,36 @@ on the model prefix — `CLAUDE_*` / `OPEN_AI_*` / `OLLAMA_*`).
 This skill declares `acp-cdc-ai-python` as a `skill_references` entry
 in `skill-manager.toml`, so installing hyper-experiments via
 skill-manager pulls it transitively. Before launching ANY evolve
-experiment that uses the default `api_base`, start the server via the
-skill's CLI (do NOT hand-launch the underlying Python entry point —
-the launcher resolves `uv`, runs `uv sync --extra server`, picks a
-free port, and writes a server-info file the experiment can probe):
+experiment that uses the default `api_base`, start a fresh server for
+that specific experiment via the skill's CLI (do NOT hand-launch the
+underlying Python entry point — the launcher resolves `uv`, runs
+`uv sync --extra server`, picks a free port, and writes a server-info
+file the experiment can probe):
 
 ```bash
 # Run from the project root (the dir containing hyper-experiments.md).
+EXP_DIR="experiments/families/<family>/<exp-NNNN>-<slug>"
+mkdir -p "$EXP_DIR/data/acp-openai-server/process"
 "$SKILL_MANAGER_HOME/skills/acp-cdc-ai-python/scripts/start-server.py" \
-    --project-root . \
-    --host 127.0.0.1 --port 8000 \
-    --log-dir ./.acp-server/logs
+    --project-root "$EXP_DIR" \
+    --host 127.0.0.1 \
+    --log-dir data/acp-openai-server/jsonl \
+    > "$EXP_DIR/data/acp-openai-server/process/stdout.log" \
+    2> "$EXP_DIR/data/acp-openai-server/process/stderr.log" &
 ```
 
-The launcher writes `<project-root>/.acp-server/server.json` with the
+The launcher writes `<experiment>/.acp-server/server.json` with the
 live `host`, `port`, and `pid`. `code/run_experiment.py` probes this
-file before importing openevolve and exits with a helpful error if it
-is missing or stale — keeping `OPENAI_API_KEY` set to the local
-sentinel is not enough on its own; the server must actually be up.
+file before importing openevolve, rewrites the local `api_base` to the
+recorded port for the in-process OpenEvolve config, and exits with a
+helpful error if the marker is missing or stale — keeping
+`OPENAI_API_KEY` set to the local sentinel is not enough on its own;
+the server must actually be up. The ACP conversation JSONL traces live
+under `<experiment>/data/acp-openai-server/jsonl/`; the server
+process's stdout/stderr live under
+`<experiment>/data/acp-openai-server/process/`. Keep these
+experiment-local so every OpenEvolve run carries its own LLM trace and
+server diagnostics.
 
 Re-point `llm.api_base` to a real OpenAI/Anthropic/Gemini endpoint
 when you want to bypass the local ACP layer; then a real

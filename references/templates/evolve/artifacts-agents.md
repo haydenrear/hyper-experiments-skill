@@ -29,21 +29,28 @@ config / prompt / seed).
 
 ## Preflight before launch
 
-1. **ACP server must be running.** The default `config.yaml` points
+1. **Experiment-local ACP server must be running.** The default `config.yaml` points
    `llm.api_base` at `http://localhost:8000/v1`, which is the
    OpenAI-compatible HTTP server provided by the
    **`acp-cdc-ai-python`** skill (a transitive skill_reference of
-   hyper-experiments). Start it from the project root with the
-   skill's launcher — never hand-launch the inner Python entry
-   point:
+   hyper-experiments). Start one server for this experiment with the
+   skill's launcher — never hand-launch the inner Python entry point:
    ```bash
+   # Run from this experiment's root directory.
+   mkdir -p data/acp-openai-server/process
    "$SKILL_MANAGER_HOME/skills/acp-cdc-ai-python/scripts/start-server.py" \
-       --project-root . --host 127.0.0.1 --port 8000 \
-       --log-dir ./.acp-server/logs
+       --project-root . \
+       --host 127.0.0.1 \
+       --log-dir data/acp-openai-server/jsonl \
+       > data/acp-openai-server/process/stdout.log \
+       2> data/acp-openai-server/process/stderr.log &
    ```
-   The launcher writes `<project-root>/.acp-server/server.json`;
-   `run_experiment.py` probes that file and refuses to launch the
-   evolutionary loop if the server is missing or its pid is dead.
+   The launcher writes this experiment's `.acp-server/server.json`;
+   `run_experiment.py` probes that file, points the local OpenEvolve
+   config at the recorded host/port, and refuses to launch the
+   evolutionary loop if the server is missing or its pid is dead. ACP
+   conversation JSONL traces belong in `data/acp-openai-server/jsonl/`;
+   server stdout/stderr belong in `data/acp-openai-server/process/`.
    See SKILL.md > "Prerequisite: the ACP-backed OpenAI-compatible
    server" for the full rationale (chain-of-custody, why the model
    string carries the `CLAUDE_*` prefix, how to re-point at a paid

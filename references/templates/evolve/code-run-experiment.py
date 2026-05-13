@@ -35,17 +35,22 @@ Required service (only when api_base is local):
     The default `config.yaml` points at the ACP-backed
     OpenAI-compatible HTTP server provided by the
     `acp-cdc-ai-python` skill (a transitive skill_reference of
-    hyper-experiments). Start it from the project root before
+    hyper-experiments). Start one server for this experiment before
     launching this experiment:
 
+        mkdir -p <experiment-dir>/data/acp-openai-server/process
         "$SKILL_MANAGER_HOME/skills/acp-cdc-ai-python/scripts/start-server.py" \
-            --project-root <project-root> \
-            --host 127.0.0.1 --port 8000
+            --project-root <experiment-dir> \
+            --host 127.0.0.1 \
+            --log-dir data/acp-openai-server/jsonl \
+            > <experiment-dir>/data/acp-openai-server/process/stdout.log \
+            2> <experiment-dir>/data/acp-openai-server/process/stderr.log &
 
-    The launcher writes `<project-root>/.acp-server/server.json`
+    The launcher writes `<experiment-dir>/.acp-server/server.json`
     with `host`, `port`, and `pid`. This script probes that file
-    before importing openevolve and exits non-zero with a hint
-    when the file is missing or the recorded pid is dead.
+    before importing openevolve, points the local `api_base` at the
+    recorded host/port, and exits non-zero with a hint when the file is
+    missing or the recorded pid is dead.
 
 `run_baselines()` runs before the evolutionary search and is a no-op by
 default — see `run_experiment.py` (default variant) and SKILL.md for the
@@ -69,7 +74,7 @@ from pathlib import Path
 
 from python_exp import hello
 
-CODE_DIR = Path(__file__).parent
+CODE_DIR = Path(__file__).resolve().parent
 RUN_CONFIG_PATH = CODE_DIR / "run_config.json"
 
 # Default API base for the local OpenAI-compatible server. Used only as
@@ -80,13 +85,14 @@ RUN_CONFIG_PATH = CODE_DIR / "run_config.json"
 # require the user to export a real key.
 LOCAL_API_BASE_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0")
 
-# Marker file the `acp-cdc-ai-python` skill's launcher drops at the
-# project root every time it starts. Lets us probe whether the server
-# the default `config.yaml` expects is actually up without making a
-# network call. Resolution walks up from the experiment's `code/` dir
-# until it finds `hyper-experiments.md` (the project root marker).
+# Marker file the `acp-cdc-ai-python` skill's launcher drops under this
+# experiment's root every time it starts. Lets us probe whether the
+# server the default `config.yaml` expects is actually up without making
+# a network call. The marker also carries the auto-picked port, so
+# evolve experiments can run one ACP server per experiment without
+# hard-coding port 8000 everywhere.
 ACP_SERVER_INFO_FILENAME = ".acp-server/server.json"
-PROJECT_ROOT_MARKER = "hyper-experiments.md"
+EXPERIMENT_ROOT_MARKER = "index.md"
 
 
 def load_run_config() -> dict:
@@ -130,10 +136,10 @@ def _smoke_check(oe_cfg: dict) -> int:
     return 0
 
 
-def _find_project_root(start: Path) -> Path | None:
-    """Walk up from `start` looking for `hyper-experiments.md`."""
+def _find_experiment_root(start: Path) -> Path | None:
+    """Walk up from `start` looking for this experiment's root."""
     for candidate in (start, *start.parents):
-        if (candidate / PROJECT_ROOT_MARKER).exists():
+        if (candidate / EXPERIMENT_ROOT_MARKER).exists() and (candidate / "code") == CODE_DIR:
             return candidate
     return None
 
@@ -144,62 +150,79 @@ def _api_base_is_local(api_base: str | None) -> bool:
     return any(host in api_base for host in LOCAL_API_BASE_HOSTS)
 
 
-def _check_acp_server(api_base: str | None) -> int:
+def _check_acp_server(api_base: str | None) -> dict | None:
     """When `api_base` is local, verify the ACP-backed server is up.
 
-    Reads `<project-root>/.acp-server/server.json` (written by the
+    Reads `<experiment-root>/.acp-server/server.json` (written by the
     `acp-cdc-ai-python` skill's launcher) and probes the recorded pid
-    with signal-0. Returns 0 if the server looks live (or if the
-    `api_base` is remote — nothing to check), non-zero with a helpful
-    error otherwise.
+    with signal-0. Returns the decoded server-info dict if the server
+    looks live, `None` if the `api_base` is remote (nothing to check),
+    and exits via `SystemExit` with a helpful error otherwise.
     """
     if not _api_base_is_local(api_base):
-        return 0
-    project_root = _find_project_root(CODE_DIR)
-    if project_root is None:
-        print("warning: could not locate hyper-experiments.md to find "
-              "the project root; skipping ACP-server preflight.",
+        return None
+    experiment_root = _find_experiment_root(CODE_DIR)
+    if experiment_root is None:
+        print("warning: could not locate this experiment's root from "
+              f"{CODE_DIR}; skipping ACP-server preflight.",
               file=sys.stderr)
-        return 0
-    info_path = project_root / ACP_SERVER_INFO_FILENAME
+        return None
+    info_path = experiment_root / ACP_SERVER_INFO_FILENAME
     if not info_path.exists():
         print(
             f"error: api_base={api_base!r} expects the local ACP-backed "
             "OpenAI-compatible server to be running, but "
             f"{info_path} is missing.\n"
-            "       Start it from the project root with the "
+            "       Start one server for this experiment with the "
             "`acp-cdc-ai-python` skill's launcher:\n"
+            f"           mkdir -p {experiment_root}/data/acp-openai-server/process\n"
             "           \"$SKILL_MANAGER_HOME/skills/acp-cdc-ai-python/"
             "scripts/start-server.py\" \\\n"
-            f"               --project-root {project_root} \\\n"
-            "               --host 127.0.0.1 --port 8000\n"
+            f"               --project-root {experiment_root} \\\n"
+            "               --host 127.0.0.1 \\\n"
+            "               --log-dir data/acp-openai-server/jsonl \\\n"
+            f"               > {experiment_root}/data/acp-openai-server/process/stdout.log \\\n"
+            f"               2> {experiment_root}/data/acp-openai-server/process/stderr.log &\n"
             "       See SKILL.md > 'Prerequisite: the ACP-backed "
             "OpenAI-compatible server' for the full rationale.",
             file=sys.stderr,
         )
-        return 1
+        raise SystemExit(1)
     try:
         info = json.loads(info_path.read_text())
         pid = int(info["pid"])
+        host = str(info["host"])
+        port = int(info["port"])
     except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
         print(f"error: {info_path} exists but is unparseable ({e}). "
               "Stop the launcher and start it again.", file=sys.stderr)
-        return 1
+        raise SystemExit(1)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         print(f"error: ACP-server marker at {info_path} points at "
               f"pid={pid}, which is no longer running. Restart the "
               "server with the launcher (see SKILL.md).", file=sys.stderr)
-        return 1
+        raise SystemExit(1)
     except PermissionError:
         # The process exists but is owned by another user — treat as
         # live (we couldn't have spawned it, but signal-0 still proves
         # presence).
         pass
     print(f"openevolve: ACP server preflight OK "
-          f"(host={info.get('host')!r} port={info.get('port')!r} pid={pid}).")
-    return 0
+          f"(host={host!r} port={port!r} pid={pid}).")
+    return {"host": host, "port": port, "pid": pid, "info_path": str(info_path)}
+
+
+def _bind_local_api_base_to_acp_server(cfg, server_info: dict | None) -> str | None:
+    """Use the experiment-local ACP server's actual host/port."""
+    api_base = getattr(cfg.llm, "api_base", None)
+    if server_info is None:
+        return api_base
+    api_base = f"http://{server_info['host']}:{server_info['port']}/v1"
+    cfg.llm.api_base = api_base
+    print(f"openevolve: using experiment-local ACP api_base={api_base}")
+    return api_base
 
 
 def _ensure_api_key_for_local(api_base: str | None) -> None:
@@ -233,8 +256,8 @@ async def _run_evolution(run_config: dict) -> int:
 
     cfg = load_config(str(config_path))
     api_base = getattr(cfg.llm, "api_base", None)
-    if _check_acp_server(api_base) != 0:
-        return 1
+    server_info = _check_acp_server(api_base)
+    api_base = _bind_local_api_base_to_acp_server(cfg, server_info)
     _ensure_api_key_for_local(api_base)
     iterations = oe_cfg.get("iterations") or cfg.max_iterations
     target_score = oe_cfg.get("target_score")

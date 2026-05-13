@@ -12,12 +12,14 @@
 #   * Anything outside openevolve (paths, baselines, project metadata)
 #     → `run_config.json` in this directory.
 #
-# Default LLM: a local OpenAI-compatible server on http://localhost:8000
-# serving `/v1/chat/completions`. The default model is
-# `claude_claude-sonnet-4-6` — this is the model the local proxy
-# routes to, not a value sent to Anthropic directly. Switch the
-# `api_base` / model below to point at a remote provider (OpenAI,
-# Gemini, etc.) when running outside the local environment.
+# Default LLM: a local OpenAI-compatible server. `api_base` below is a
+# bootstrap sentinel; `code/run_experiment.py` reads this experiment's
+# `.acp-server/server.json` and rewrites the in-process config to the
+# server's actual auto-picked port before OpenEvolve starts. The default
+# model is `CLAUDE_claude-sonnet-4-6` — this is the model the local
+# proxy routes to, not a value sent to Anthropic directly. Switch the
+# `api_base` / model below to point at a remote provider (OpenAI, Gemini,
+# etc.) when running outside the local environment.
 #
 # Auth: openevolve always reads `OPENAI_API_KEY` from the environment.
 # Local servers usually ignore the value but the SDK still requires
