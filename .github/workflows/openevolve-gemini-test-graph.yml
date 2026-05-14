@@ -73,7 +73,7 @@ jobs:
         run: |
           gh repo view haydenrear/acp-cdc-ai-python --json nameWithOwner,visibility
 
-      - name: Restore dependency caches
+      - name: Restore Homebrew and build caches
         uses: actions/cache@v4
         with:
           path: |
@@ -84,12 +84,21 @@ jobs:
             ~/.npm
             ~/.cache/uv
             ~/Library/Caches/uv
+          key: ${{ runner.os }}-openevolve-gemini-build-${{ hashFiles('test_graph/gradle/wrapper/gradle-wrapper.properties', 'test_graph/**/*.gradle.kts') }}
+          restore-keys: |
+            ${{ runner.os }}-openevolve-gemini-build-
+
+      - name: Restore skill-manager tool caches
+        id: skill-manager-tool-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
             /Users/hayde/.skill-manager/pm
             /Users/hayde/.skill-manager/npm
             /Users/hayde/.skill-manager/bin/cli
-          key: ${{ runner.os }}-openevolve-gemini-deps-${{ hashFiles('test_graph/gradle/wrapper/gradle-wrapper.properties', 'test_graph/**/*.gradle.kts', '.github/workflows/openevolve-gemini-test-graph.yml') }}
+          key: ${{ runner.os }}-skill-manager-tools-v1
           restore-keys: |
-            ${{ runner.os }}-openevolve-gemini-deps-
+            ${{ runner.os }}-skill-manager-tools-
 
       - name: Install Homebrew packages
         run: |
@@ -130,10 +139,19 @@ jobs:
           skill-manager onboard
           skill-manager install -y "file:$RUNNER_TEMP/acp-cdc-ai-python"
           skill-manager sync
-          "$SKILL_MANAGER_HOME/skills/skill-manager/scripts/env.sh" --skills acp-cdc-ai-python --pretty
           skill-manager list
           command -v gemini
           gemini --version
+
+      - name: Save skill-manager tool caches
+        if: always() && steps.skill-manager-tool-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /Users/hayde/.skill-manager/pm
+            /Users/hayde/.skill-manager/npm
+            /Users/hayde/.skill-manager/bin/cli
+          key: ${{ runner.os }}-skill-manager-tools-v1
 
       - name: Validate scaffold symlinks resolve to skill-manager installs
         run: |
