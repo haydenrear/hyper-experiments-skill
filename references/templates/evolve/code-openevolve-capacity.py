@@ -4,6 +4,7 @@ The ACP-backed OpenAI-compatible server can surface provider quota errors
 like:
 
     You have exhausted your capacity on this model. Your quota will reset after 15h2m49s.
+    You have exhausted your daily quota on this model.
 
 OpenEvolve normally retries the same model and then fails the iteration.
 This helper makes quota exhaustion fail fast for the current model,
@@ -29,11 +30,11 @@ ENV_DEFAULT_COOLDOWN_SECONDS = "OPENEVOLVE_MODEL_COOLDOWN_DEFAULT_SECONDS"
 ENV_ON_ALL_UNAVAILABLE = "OPENEVOLVE_MODEL_COOLDOWN_ON_ALL_UNAVAILABLE"
 DEFAULT_COOLDOWN_SECONDS = 24 * 60 * 60
 _CAPACITY_RE = re.compile(
-    r"exhausted your capacity on this model.*?quota will reset after\s+([0-9dhms\s]+)",
+    r"exhausted your (?:daily quota|capacity) on this model.*?quota will reset after\s+([0-9dhms\s]+)",
     re.IGNORECASE | re.DOTALL,
 )
 _CAPACITY_SIGNAL_RE = re.compile(
-    r"exhausted your capacity on this model",
+    r"exhausted your (?:daily quota|capacity) on this model",
     re.IGNORECASE | re.DOTALL,
 )
 _DURATION_PART_RE = re.compile(r"(\d+)\s*([dhms])", re.IGNORECASE)

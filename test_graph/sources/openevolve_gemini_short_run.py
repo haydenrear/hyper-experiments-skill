@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -20,6 +21,11 @@ from pathlib import Path
 
 from testgraphsdk import NodeResult, NodeSpec, node
 
+
+CAPACITY_SIGNAL_RE = re.compile(
+    r"exhausted your (?:daily quota|capacity) on this model",
+    re.IGNORECASE | re.DOTALL,
+)
 
 SPEC = (
     NodeSpec("openevolve.gemini.short_run")
@@ -243,7 +249,7 @@ def main(ctx):
         ]
 
         llm_generation_failed = "LLM generation failed" in run_text
-        capacity_in_run_log = "exhausted your capacity on this model" in run_text.lower()
+        capacity_in_run_log = CAPACITY_SIGNAL_RE.search(run_text) is not None
         success = (
             exit_code == 0
             and "openevolve: evolution complete." in run_text
