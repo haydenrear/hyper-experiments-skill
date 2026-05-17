@@ -93,8 +93,9 @@ config / prompt / seed).
 - Do **not** weaken the mutation-agent output contract in
   `code/config.yaml` or `code/prompt-templates/diff_user.txt`.
   ACP-backed coding agents must return only OpenEvolve diff blocks
-  matching `diff_pattern`. They must not call write/edit/patch/shell
-  tools, create `main.py`, or create alternate source files.
+  using the native `<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE`
+  marker format. They must not call write/edit/patch/shell tools,
+  create `main.py`, or create alternate source files.
 - Keep `code/openevolve_capacity.py` active unless the experiment
   deliberately tests model-routing behavior. It owns the
   per-experiment quota cooldown file and priority failover across

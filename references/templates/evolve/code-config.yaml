@@ -57,8 +57,8 @@ llm:
 # "Crafting Effective System Messages" section. Iterate on this prompt
 # explicitly; treat changes to it as a counterfactual delta in their
 # own right. `template_dir` overrides OpenEvolve's default diff prompt
-# so ACP-backed coding agents return only parseable diff blocks and do
-# not use write tools. Keep `diff_pattern` below in sync with that file.
+# so ACP-backed coding agents return only native OpenEvolve diff blocks
+# and do not use write tools.
 prompt:
   template_dir: prompt-templates
   system_message: |
@@ -100,5 +100,4 @@ evaluator:
 # Evolution mode: diff_based_evolution=true means the LLM emits diffs
 # (cheaper, smaller mutations); false = full rewrites.
 diff_based_evolution: true
-diff_pattern: '<<< SEARCH\n(.*?)--- REPLACE\n(.*?)>>> END'
 max_code_length: 20000

@@ -2758,9 +2758,10 @@ for hyper-experiments:
   Evolve experiments also ship `code/prompt-templates/diff_user.txt`,
   which overrides OpenEvolve's default diff prompt with a strict
   "return only diff blocks; do not use write tools" contract for
-  ACP-backed coding agents. `code/config.yaml` sets `diff_pattern` to
-  match that template. Keep both the output contract and marker format
-  intact when customizing the experiment prompt.
+  ACP-backed coding agents while keeping OpenEvolve's native
+  `<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE` marker format.
+  Keep the output contract and marker format intact when customizing
+  the experiment prompt.
 - **Model-capacity failover** (`code/openevolve_capacity.py`): the
   `llm.models` list in `code/config.yaml` is treated as priority
   order. If a model returns an ACP/Google-style quota message like

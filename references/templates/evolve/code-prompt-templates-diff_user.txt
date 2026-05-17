@@ -25,21 +25,21 @@ Output contract:
 - Each SEARCH section must exactly match text in the current program.
 
 Required format:
-<<< SEARCH
+<<<<<<< SEARCH
 # Original code to find and replace (must match exactly)
---- REPLACE
+=======
 # New replacement code
->>> END
+>>>>>>> REPLACE
 
 Example:
-<<< SEARCH
+<<<<<<< SEARCH
 for i in range(m):
     for j in range(p):
         for k in range(n):
             C[i, j] += A[i, k] * B[k, j]
---- REPLACE
+=======
 for i in range(m):
     for k in range(n):
         for j in range(p):
             C[i, j] += A[i, k] * B[k, j]
->>> END
+>>>>>>> REPLACE

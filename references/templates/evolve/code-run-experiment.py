@@ -221,6 +221,7 @@ def _bind_local_api_base_to_acp_server(cfg, server_info: dict | None) -> str | N
         return api_base
     api_base = f"http://{server_info['host']}:{server_info['port']}/v1"
     cfg.llm.api_base = api_base
+    cfg.llm.update_model_params({"api_base": api_base}, overwrite=True)
     print(f"openevolve: using experiment-local ACP api_base={api_base}")
     return api_base
 
