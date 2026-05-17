@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -246,9 +247,6 @@ def _merge(template, parent, child_vars, path, changes):
     return copy.deepcopy(template)
 
 
-EXP_ID_PREFIX_RE = re.compile(r"^exp-\d{4}-")
-
-
 def parent_slug_from_dir(parent_dir_name: str):
     """Extract the slug from a parent experiment directory name like
     `exp-0036-polynomial-grpo-overfit-shakedown` → `polynomial-grpo-overfit-shakedown`.
@@ -257,187 +255,155 @@ def parent_slug_from_dir(parent_dir_name: str):
     return m.group(1) if m else None
 
 
-# JSON keys whose values identify the experiment and must be rewritten
-# when branching/copying. Values are functions that compute the new value
-# from (old_value, child_vars, parent_identity). `parent_identity` is the
-# tuple (parent_exp_id, parent_slug) so identity-bearing strings like
-# `run_name = "exp-0036-some-slug"` can be retargeted even when the
-# parent stamped the literal value rather than a placeholder.
-def _rewrite_exp_id(_old, child_vars, _parent):
-    return child_vars["experiment_id"]
-
-
-def _rewrite_slug(_old, child_vars, _parent):
-    return child_vars["slug"]
-
-
-def _rewrite_run_name(old, child_vars, parent):
-    new_prefix = f"{child_vars['experiment_id']}-{child_vars['slug']}"
-    if not isinstance(old, str):
-        return new_prefix
-    parent_exp_id, parent_slug = parent
-    parent_prefix = f"{parent_exp_id}-{parent_slug}" if parent_slug else parent_exp_id
-    if parent_prefix and old.startswith(parent_prefix):
-        return new_prefix + old[len(parent_prefix):]
-    return new_prefix
-
-
-def _rewrite_parent_experiment(_old, child_vars, _parent):
-    return child_vars.get("parent_experiment", _old)
-
-
-def _rewrite_parent_checkpoint(_old, child_vars, _parent):
-    # `parent_checkpoint` defaults to the literal string "null" when no
-    # --checkpoint was passed. That is intentional: an inherited parent's
-    # parent_checkpoint is wrong for the child by definition, and "null"
-    # is the canonical "none specified" marker used elsewhere in the
-    # skill (index.md, plan.md). The operator overrides to a real path
-    # via the audit block when a checkpoint resume is meant.
-    return child_vars.get("parent_checkpoint", _old)
-
-
-_IDENTITY_REWRITES = {
-    "experiment_id": _rewrite_exp_id,
-    "slug": _rewrite_slug,
-    "run_name": _rewrite_run_name,
-    "parent_experiment": _rewrite_parent_experiment,
-    "parent_checkpoint": _rewrite_parent_checkpoint,
+_TEXT_REWRITE_SKIP_DIRS = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "node_modules",
 }
 
 
-def sweep_identity_in_json(
-    json_path: Path,
-    child_vars: dict,
-    parent_identity: tuple,
-):
-    """Walk a JSON tree and rewrite identity-bearing values whose KEY is in
-    `_IDENTITY_REWRITES` (`experiment_id`, `slug`, `run_name`). Returns a list
-    of (dotted_path, old, new) for every rewrite that changed a value. Writes
-    the file back only if at least one change occurred.
+def branch_text_replacements(parent_identity: tuple, child_identity: tuple):
+    """Return the ordered string replacements for a branched copied tree.
 
-    `parent_identity` is `(parent_exp_id, parent_slug)`. `parent_slug` may be
-    `None` if the parent dir name did not match the canonical pattern; in
-    that case `run_name` retargeting falls back to a full overwrite.
-    """
-    obj = json.loads(json_path.read_text())
-    changes: list = []
+    The order is intentionally simple and visible:
+      1. full `exp-NNNN-source-slug` prefix,
+      2. bare `exp-NNNN`,
+      3. bare source slug.
 
-    def walk(node, path):
-        if isinstance(node, dict):
-            for k, v in list(node.items()):
-                p = f"{path}.{k}" if path else k
-                fn = _IDENTITY_REWRITES.get(k)
-                if fn is not None and isinstance(v, (str, int, float, bool)):
-                    new = fn(v, child_vars, parent_identity)
-                    if new != v:
-                        changes.append((p, v, new))
-                        node[k] = new
-                else:
-                    walk(v, p)
-        elif isinstance(node, list):
-            for i, item in enumerate(node):
-                walk(item, f"{path}[{i}]")
-
-    walk(obj, "")
-    if changes:
-        json_path.write_text(json.dumps(obj, indent=2) + "\n")
-    return changes
-
-
-def _enumerate_leaf_paths(obj, prefix=""):
-    """Yield (dotted_path, value) for every leaf in a JSON tree."""
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            yield from _enumerate_leaf_paths(v, f"{prefix}.{k}" if prefix else k)
-    elif isinstance(obj, list):
-        for i, v in enumerate(obj):
-            yield from _enumerate_leaf_paths(v, f"{prefix}[{i}]")
-    else:
-        yield prefix, obj
-
-
-def enumerate_inherited_leaves(json_path: Path, rewritten_paths):
-    """List every (dotted_path, value) leaf in `json_path` whose path is not
-    in `rewritten_paths`. This is the audit list of fields the child inherited
-    verbatim from the parent — the next agent must decide keep/override/delete
-    for each one (see SKILL.md > 'Inherited config audit')."""
-    obj = json.loads(json_path.read_text())
-    skip = set(rewritten_paths or ())
-    return [(p, v) for p, v in _enumerate_leaf_paths(obj) if p not in skip]
-
-
-def sweep_parent_identity_references(
-    json_path: Path,
-    parent_identity: tuple,
-    child_identity: tuple,
-    skip_paths=None,
-):
-    """Find string values containing the parent's identity prefix that were
-    not auto-rewritten. Returns (dotted_path, value, suggested_rewrite, kind)
-    tuples; does NOT modify the file.
-
-    `kind` is one of:
-      - "exact"  — value is exactly the parent prefix (e.g. "exp-0036-foo");
-                   suggested rewrite swaps in the child prefix.
-      - "embedded-with-slug"
-                 — value contains "exp-NNNN-slug" as a substring; rewrite
-                   swaps that occurrence only.
-      - "embedded-bare"
-                 — value contains "exp-NNNN" but not "-slug"; this is more
-                   likely a deliberate reference (parent checkpoint path,
-                   ancestor mention) than a leaked identity. Reported but
-                   suggested_rewrite is None — let the operator decide.
-
-    The caller is expected to surface every result for review; nothing here
-    is auto-applied. Identity rewrites at known keys are still handled by
-    `sweep_identity_in_json` — this sweep catches the rest.
+    The caller protects the full prefix before running the bare id and slug
+    replacements, so `exp-0049-old-slug` is counted as one id+slug rewrite
+    instead of three overlapping rewrites.
     """
     parent_exp_id, parent_slug = parent_identity
     child_exp_id, child_slug = child_identity
-    skip = set(skip_paths or ())
+    replacements = []
+    if parent_slug:
+        replacements.append((
+            f"{parent_exp_id}-{parent_slug}",
+            f"{child_exp_id}-{child_slug}",
+            "id+slug",
+        ))
+    replacements.append((parent_exp_id, child_exp_id, "id"))
+    if parent_slug:
+        replacements.append((parent_slug, child_slug, "slug"))
+    return replacements
 
-    parent_prefix_with_slug = (
-        f"{parent_exp_id}-{parent_slug}" if parent_slug else None
-    )
-    child_prefix_with_slug = f"{child_exp_id}-{child_slug}"
 
-    # Match parent's "exp-NNNN-slug" first (more specific), fall back to
-    # bare "exp-NNNN" (the parent_exp_id literal). Anchored to word
-    # boundaries so we don't false-match inside another id.
-    bare_re = re.compile(rf"\b{re.escape(parent_exp_id)}\b")
+def replace_branch_identity_in_string(
+    value: str,
+    *,
+    parent_identity: tuple,
+    child_identity: tuple,
+) -> tuple[str, list]:
+    """Apply the branch text replacements to one string value.
 
-    obj = json.loads(json_path.read_text())
-    findings = []
+    Returns `(new_value, replacement_counts)`, where replacement_counts is
+    a list of `{kind, old, new, count}` dicts.
+    """
+    parent_exp_id, parent_slug = parent_identity
+    child_exp_id, child_slug = child_identity
+    new_value = value
+    counts = []
 
-    def visit(node, path):
-        if isinstance(node, dict):
-            for k, v in node.items():
-                visit(v, f"{path}.{k}" if path else k)
-        elif isinstance(node, list):
-            for i, v in enumerate(node):
-                visit(v, f"{path}[{i}]")
-        elif isinstance(node, str):
-            if path in skip:
-                return
-            # Most specific first.
-            if parent_prefix_with_slug and parent_prefix_with_slug in node:
-                if node == parent_prefix_with_slug:
-                    findings.append((
-                        path, node, child_prefix_with_slug, "exact",
-                    ))
-                else:
-                    suggested = node.replace(
-                        parent_prefix_with_slug, child_prefix_with_slug,
-                    )
-                    findings.append((
-                        path, node, suggested, "embedded-with-slug",
-                    ))
-                return
-            if bare_re.search(node):
-                findings.append((path, node, None, "embedded-bare"))
+    marker = None
+    if parent_slug:
+        old_full = f"{parent_exp_id}-{parent_slug}"
+        new_full = f"{child_exp_id}-{child_slug}"
+        full_count = new_value.count(old_full)
+        if full_count:
+            marker_base = "__HX_BRANCH_FULL_ID_SLUG_REWRITE__"
+            marker = marker_base
+            i = 0
+            while marker in new_value:
+                i += 1
+                marker = f"{marker_base}{i}__"
+            new_value = new_value.replace(old_full, marker)
+            counts.append({
+                "kind": "id+slug",
+                "old": old_full,
+                "new": new_full,
+                "count": full_count,
+            })
 
-    visit(obj, "")
-    return findings
+    slug_marker = None
+    if parent_slug and parent_slug in child_slug and child_slug in new_value:
+        marker_base = "__HX_BRANCH_CHILD_SLUG_PROTECT__"
+        slug_marker = marker_base
+        i = 0
+        while slug_marker in new_value:
+            i += 1
+            slug_marker = f"{marker_base}{i}__"
+        new_value = new_value.replace(child_slug, slug_marker)
+
+    for old, new, kind in branch_text_replacements(parent_identity, child_identity):
+        if kind == "id+slug":
+            continue
+        count = new_value.count(old)
+        if not count:
+            continue
+        new_value = new_value.replace(old, new)
+        counts.append({"kind": kind, "old": old, "new": new, "count": count})
+    if slug_marker is not None:
+        new_value = new_value.replace(slug_marker, child_slug)
+    if marker is not None:
+        new_value = new_value.replace(marker, f"{child_exp_id}-{child_slug}")
+    return new_value, counts
+
+
+def rewrite_branch_identity_in_text_files(
+    paths,
+    *,
+    report_root: Path,
+    parent_identity: tuple,
+    child_identity: tuple,
+):
+    """Run the branch search/replace over copied text files.
+
+    Binary files and non-UTF-8 files are skipped. Returns
+    `(relative_path, replacement_counts)` entries for changed files.
+    """
+    changed = []
+
+    def iter_files(path: Path):
+        if not path.exists():
+            return
+        if path.is_file():
+            yield path
+            return
+        for dirpath, dirnames, filenames in os.walk(path):
+            dirnames[:] = [
+                d for d in dirnames if d not in _TEXT_REWRITE_SKIP_DIRS
+            ]
+            base = Path(dirpath)
+            for filename in filenames:
+                yield base / filename
+
+    for path in paths:
+        for file_path in iter_files(path):
+            try:
+                raw = file_path.read_bytes()
+            except OSError:
+                continue
+            if b"\0" in raw:
+                continue
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            new, counts = replace_branch_identity_in_string(
+                text,
+                parent_identity=parent_identity,
+                child_identity=child_identity,
+            )
+            if not counts:
+                continue
+            file_path.write_bytes(new.encode("utf-8"))
+            changed.append((file_path.relative_to(report_root), counts))
+    return changed
 
 
 # --- python_exp vendoring ----------------------------------------------------

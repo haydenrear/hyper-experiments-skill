@@ -50,15 +50,15 @@
 ## Inherited config audit
 <!--
 Filled in after running new_experiment.py / branch_experiment.py.
-The scaffolder prints three audit blocks; record the decisions here
+The scaffolder prints audit blocks; record the decisions here
 so the next reader can see what was deliberate vs. inherited cruft.
 See SKILL.md > 'Inherited config audit' for the ritual.
 -->
 
-### Parent-identity references reviewed
-| path | original value | decision | rationale |
-|------|----------------|----------|-----------|
-| _e.g._ `logging.wandb.tags[1]` | `"exp-0001-lower-lr"` | rewritten | stale tag from parent |
+### Search/replace reviewed
+| path | replacement | decision | rationale |
+|------|-------------|----------|-----------|
+| _e.g._ `code/run_config.json` | `exp-0001` -> `exp-0002` | keep | copied config should be child-facing |
 
 ### Inherited verbatim — disposition
 | key | value | decision (keep/override/delete) | rationale |

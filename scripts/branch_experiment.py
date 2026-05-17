@@ -13,13 +13,13 @@ templates. For a clean counterfactual scaffolded from templates, use
 `new_experiment.py` instead.
 
 What is copied from the source:
-- `code/` tree verbatim (including `vendored/` if present),
+- `code/` tree (including `vendored/` if present), with source-id
+  text references retargeted to the child,
 - `data/generation-scripts/`,
 - `data/manifest.md`,
-- `code/run_config.json` — copied verbatim from the source. Identity-
-  bearing string values (`experiment_id`, `slug`, `run_name`) are then
-  swept and rewritten for the child via `sweep_identity_in_json`. The
-  source's config is the source of truth for hyperparameters and
+- `code/run_config.json` — copied from the source and retargeted by the
+  same plain text search/replace as the rest of the copied tree. The
+  source's config remains the source of truth for hyperparameters and
   schema; we deliberately do NOT re-merge through a template, because
   template-driven structural injection silently overrode parent
   choices and caused real bugs.
@@ -58,7 +58,6 @@ from pathlib import Path
 from _lib import (
     allocate_experiment_id,
     bullet_list,
-    enumerate_inherited_leaves,
     experiment_variant_from_run_config,
     find_experiment_dir,
     find_experiments_root,
@@ -67,9 +66,8 @@ from _lib import (
     parent_slug_from_dir,
     print_vendoring_provenance,
     render_template,
+    rewrite_branch_identity_in_text_files,
     slugify,
-    sweep_identity_in_json,
-    sweep_parent_identity_references,
     utcnow_iso,
     verify_or_fix_branched_python_exp,
 )
@@ -89,10 +87,10 @@ FRESH_FILE_TEMPLATES = {
 }
 
 COPIED_FROM_SOURCE = [
-    "code/ (entire tree, including any vendored/ subdir)",
+    "code/ (entire tree, including any vendored/ subdir; source ids retargeted)",
     "data/generation-scripts/",
-    "data/manifest.md",
-    "code/run_config.json (hyperparameters inherited; identity rewritten)",
+    "data/manifest.md (source ids retargeted)",
+    "code/run_config.json (hyperparameters inherited; identity/source ids rewritten)",
 ]
 
 
@@ -528,59 +526,24 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
-    # 6. Sweep every JSON file under code/ for identity-bearing keys
-    #    (experiment_id, slug, run_name). This includes run_config.json
-    #    itself: we deliberately do NOT re-merge it through a template.
-    #    The source's config is the source of truth for hyperparameters,
-    #    architecture, and any project-specific schema; injecting fields
-    #    from a generic template silently overrides the parent's choices
-    #    and was a real footgun (see commit history). Identity sweep
-    #    only changes name-bearing string values, never structural keys.
+    # 6. Run the branch retargeting as plain search/replace over copied text
+    #    files. This intentionally includes JSON as text: full source
+    #    id+slug first, then bare source id, then bare source slug. Generated
+    #    files (index.md, plan.md, run.md, ...) are not swept, so they can
+    #    still record the lineage parent and branch provenance accurately.
     source_config_path = source_dir / "code" / "run_config.json"
     parent_identity = (args.source, parent_slug)
     child_identity = (exp_id, slug)
-    run_config_renames: list = []
-    run_config_id_refs: list = []
-    run_config_inherited: list = []
-    extra_json_changes: dict = {}
-    extra_json_id_refs: dict = {}
-    code_dir = exp_dir / "code"
-    if code_dir.exists():
-        for json_path in sorted(code_dir.rglob("*.json")):
-            try:
-                changed = sweep_identity_in_json(json_path, vars_, parent_identity)
-            except json.JSONDecodeError:
-                continue
-            rewritten_paths = {p for p, _o, _n in changed}
-            try:
-                id_refs = sweep_parent_identity_references(
-                    json_path,
-                    parent_identity=parent_identity,
-                    child_identity=child_identity,
-                    skip_paths=rewritten_paths,
-                )
-            except json.JSONDecodeError:
-                id_refs = []
-            if json_path == exp_dir / RUN_CONFIG_OUT:
-                run_config_renames = changed
-                run_config_id_refs = id_refs
-                # Skip regex-flagged paths in the verbatim list too — they
-                # are surfaced separately under "parent-identity references"
-                # with their own decision space (rewrite | keep | remove).
-                inherited_skip = set(rewritten_paths) | {
-                    p for p, *_ in id_refs
-                }
-                try:
-                    run_config_inherited = enumerate_inherited_leaves(
-                        json_path, inherited_skip,
-                    )
-                except json.JSONDecodeError:
-                    run_config_inherited = []
-            else:
-                if changed:
-                    extra_json_changes[json_path.relative_to(exp_dir)] = changed
-                if id_refs:
-                    extra_json_id_refs[json_path.relative_to(exp_dir)] = id_refs
+    text_file_rewrites = rewrite_branch_identity_in_text_files(
+        [
+            exp_dir / "code",
+            exp_dir / "data" / "generation-scripts",
+            exp_dir / "data" / "manifest.md",
+        ],
+        report_root=exp_dir,
+        parent_identity=parent_identity,
+        child_identity=child_identity,
+    )
 
     # 7. Evolve-variant: inherit (or refuse to inherit) the parent's
     #    openevolve database. By default the child's
@@ -611,60 +574,26 @@ def main() -> int:
     print()
     print_vendoring_provenance(vendor_prov, source_kind="parent")
     print()
-    def _trim(v):
-        s = json.dumps(v, ensure_ascii=False)
-        return s if len(s) <= 60 else s[:57] + "..."
-
     if source_config_path.exists():
-        print(f"run_config.json: copied verbatim from {source_config_path.relative_to(root)}.")
-        print()
-        if run_config_renames:
-            print("  Identity-bearing fields auto-rewritten:")
-            for path, old, new in run_config_renames:
-                print(f"    - {path}: {_trim(old)} -> {_trim(new)}")
-        else:
-            print("  (no identity-bearing fields needed auto-rewriting)")
-        if run_config_id_refs:
-            print()
-            print("  Parent-identity references found (review and decide — not auto-rewritten):")
-            for path, value, suggested, kind in run_config_id_refs:
-                if suggested is not None:
-                    note = "likely identity leak — rewrite or remove"
-                    print(f"    - {path}: {_trim(value)}")
-                    print(f"        suggestion: {_trim(suggested)}  ({note})")
-                else:
-                    print(f"    - {path}: {_trim(value)}")
-                    print(f"        suggestion: keep if deliberate (e.g. parent-checkpoint reference); rewrite or remove if leaked")
-        if run_config_inherited:
-            print()
-            print("  Inherited verbatim — audit each (keep | override | delete):")
-            for path, value in run_config_inherited:
-                print(f"    - {path}: {_trim(value)}")
-        print()
-        print("  Next: write your decisions into plan.md's '## Inherited config audit'")
-        print("  block before the freeze commit. Hyperparameters listed in the")
-        print("  counterfactual delta must be overridden in run_config.json now —")
-        print("  inherited values are the SOURCE's choices, not this experiment's.")
+        print(f"run_config.json: copied from {source_config_path.relative_to(root)} and swept as text.")
     else:
         print("run_config.json: source had none — child has none either.")
+    if text_file_rewrites:
+        print()
+        print("Search/replace report:")
+        for path, counts in text_file_rewrites:
+            print(f"  - {path}:")
+            for item in counts:
+                suffix = "replacement" if item["count"] == 1 else "replacements"
+                print(f"      {item['kind']}: {item['old']!r} -> {item['new']!r} ({item['count']} {suffix})")
+    else:
+        print()
+        print("Search/replace report: no source id or slug strings found in copied text files.")
     if purged_cruft:
         print()
         print("Purged build artifacts copied from source code/ tree:")
         for path in purged_cruft:
             print(f"  - {path}")
-    if extra_json_changes or extra_json_id_refs:
-        print()
-        print("Other code/ JSON files swept:")
-        all_paths = sorted(set(extra_json_changes) | set(extra_json_id_refs))
-        for path in all_paths:
-            print(f"  {path}:")
-            for dotted, old, new in extra_json_changes.get(path, []):
-                print(f"    auto-rewrote {dotted}: {_trim(old)} -> {_trim(new)}")
-            for dotted, value, suggested, _kind in extra_json_id_refs.get(path, []):
-                if suggested is not None:
-                    print(f"    review {dotted}: {_trim(value)} -> suggestion {_trim(suggested)}")
-                else:
-                    print(f"    review {dotted}: {_trim(value)} (deliberate reference?)")
     if openevolve_db_report is not None:
         print()
         _print_openevolve_db_report(openevolve_db_report, source_dir=source_dir,
@@ -700,18 +629,19 @@ def main() -> int:
         print(f"     `data/openevolve_model_capacity.json` plus append events to")
         print(f"     `data/openevolve_model_capacity_events.jsonl`.")
     print(f"  1. Inherited config audit (see SKILL.md > 'Inherited config audit'):")
-    print(f"     - For each 'parent-identity reference' listed above, decide")
-    print(f"       rewrite vs. keep and apply directly to run_config.json.")
-    print(f"     - For each 'inherited verbatim' key, decide keep | override |")
+    print(f"     - Review the search/replace report above. If any retargeted")
+    print(f"       copied reference was intentionally parent-facing, restore it")
+    print(f"       explicitly and record why in plan.md.")
+    print(f"     - For each inherited run_config key, decide keep | override |")
     print(f"       delete. Override now if the key is in the counterfactual delta;")
     print(f"       delete if it was a parent-specific setting that does not apply.")
     print(f"     - Record decisions in {rel}/plan.md under '## Inherited config audit'")
     print(f"       before the freeze commit. Do NOT carry parent cruft forward —")
     print(f"       the next agent should not have to spelunk to figure out why")
     print(f"       a stale field is still in this config.")
-    print(f"  2. Review code/run_experiment.py and code/check_regressions.py —")
-    print(f"     their module docstrings may still reference {args.source}'s")
-    print(f"     identity; update to {exp_id} where the identity matters.")
+    print(f"  2. Review copied implementation notes and comments if this branch")
+    print(f"     intentionally needs to mention {args.source}; the automatic")
+    print(f"     source-id sweep retargeted copied text references to {exp_id}.")
     print(f"  3. Chain of custody: if code/vendored/ was copied from the source,")
     print(f"     it captures the SOURCE's freeze, not this experiment's. Re-run")
     print(f"     the freeze procedure (see references/chain-of-custody.md) and")

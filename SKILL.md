@@ -232,16 +232,16 @@ python scripts/branch_experiment.py \
     # --command "..."
 ```
 
-Copied verbatim from the source:
+Copied from the source:
 
 - `code/` tree in full (including `vendored/` if the source was already frozen),
-- `data/generation-scripts/`,
-- `data/manifest.md`,
-- `code/run_config.json` — merged through the template so name-bearing
-  slots (`experiment_id`, `slug`, `run_name`, `logging.wandb.run_name`,
-  `logging.wandb.tags`) are rewritten for the child and every other
-  hyperparameter is inherited byte-for-byte. The script emits the same
-  rename report as `new_experiment.py`.
+  with source experiment ids retargeted to the child in copied text files,
+- `data/generation-scripts/`, with source experiment ids retargeted in
+  copied text files,
+- `data/manifest.md`, with source experiment ids retargeted,
+- `code/run_config.json` — copied from the source so every hyperparameter
+  is inherited byte-for-byte, then retargeted by the same plain text
+  search/replace as the rest of the copied tree.
 
 Rewritten in place in the copied tree:
 
@@ -257,12 +257,6 @@ populated **Branch provenance** block:
 Left empty:
 
 - `logs/`, `tensorboard/`, `checkpoints/`, `data/generated/`.
-
-What the script **does not** touch:
-
-- `code/run_experiment.py` and `code/check_regressions.py` docstrings
-  (they may still reference the source's id/title — the branch report
-  reminds the operator to review them).
 
 #### Branch vs. scaffold — which to use
 
@@ -1230,32 +1224,28 @@ The inheritance algorithm is:
 5. Any keys present only in the template but not in the parent are
    added to the child with rendered values.
 
-The scaffolder prints a **rename report** after creating the child.
-Identity-bearing fields are auto-rewritten (the keys themselves —
-`experiment_id`, `slug`, `run_name`, `parent_experiment`,
-`parent_checkpoint`, plus any nested copy at e.g.
-`logging.wandb.run_name`). Parent-identity prefixes that appear in
-*values* under unexpected keys (a wandb tag, a comment string, a
-custom path) are detected by a regex sweep and surfaced for review,
-not auto-rewritten — a string like `"exp-0036-foo"` may be a stale
-identity leak or a deliberate reference, and only the operator can
-tell:
+The scaffolder prints a **search/replace report** after creating a
+branched child. In copied text files, including JSON treated as text,
+`branch_experiment.py` applies this ordered replacement:
+
+1. `exp-0049-old-slug` -> `exp-0050-new-slug`
+2. `exp-0049` -> `exp-0050`
+3. `old-slug` -> `new-slug`
+
+Generated lineage files (`index.md`, `plan.md`, `run.md`, and branch
+provenance) are rendered fresh and are not swept, so they can still say
+the child was branched from `exp-0049`.
 
 ```
-run_config.json: inherited from experiments/families/.../code/run_config.json.
+run_config.json: copied from experiments/families/.../code/run_config.json and swept as text.
 
-  Identity-bearing fields auto-rewritten:
-    - experiment_id:                    "exp-0001"            -> "exp-0002"
-    - run_name:                         "exp-0001-lower-lr"   -> "exp-0002-lr-drop"
-    - logging.wandb.run_name:           "exp-0001-lower-lr"   -> "exp-0002-lr-drop"
-    - parent_experiment:                "exp-0000"            -> "exp-0001"
-    - parent_checkpoint:                ".../ckpt-step-8000"  -> ".../ckpt-step-12000"
-
-  Parent-identity references found (review and decide — not auto-rewritten):
-    - logging.wandb.tags[1]:            "exp-0001-lower-lr"
-        suggestion: rewrite to "exp-0002-lr-drop" (looks like a stale tag)
-    - hyperparameters.notes:            "based on exp-0001 ablation"
-        suggestion: keep (deliberate reference) or rewrite — operator decides
+Search/replace report:
+  - code/run_config.json:
+      id+slug: 'exp-0001-lower-lr' -> 'exp-0002-lr-drop' (2 replacements)
+      id: 'exp-0001' -> 'exp-0002' (4 replacements)
+      slug: 'lower-lr' -> 'lr-drop' (1 replacement)
+  - code/run_experiment.py:
+      id: 'exp-0001' -> 'exp-0002' (1 replacement)
 
   Inherited verbatim — audit each (keep | override | delete):
     - learning_rate                     0.0003
@@ -1305,24 +1295,20 @@ The fix is *attention, not auto-prune*. Neither `new_experiment.py`
 nor `branch_experiment.py` deletes inherited fields — deletion is too
 dangerous, because a "weird" inherited param often turns out to be
 load-bearing in a way the child's operator does not yet appreciate.
-Instead, the scaffolders surface three audit blocks in their prompt
-return, and the operator (or the LLM acting on their behalf) treats
-those blocks as **work to do before the freeze commit**, not
+Instead, the scaffolders surface audit blocks in their prompt return,
+and the operator (or the LLM acting on their behalf) treats those
+blocks as **work to do before the freeze commit**, not
 informational noise:
 
 1. **Identity rewrites applied** — every name-bearing field the
-   script updated automatically (`experiment_id`, `slug`, `run_name`,
-   `parent_experiment`, `parent_checkpoint`, `logging.wandb.run_name`,
-   `logging.wandb.tags`, etc.). These are reported so nothing slips
-   past review, but no further action is required for them.
-2. **Parent-identity references found (review and decide)** — every
-   string value anywhere in the JSON tree that contains the parent's
-   `exp-NNNN[-slug]` prefix and was *not* auto-rewritten. Each entry
-   is a candidate leak: a wandb tag like `"exp-0036-foo"`, a comment
-   string, a path embedded in a custom hyperparameter. The operator
-   decides per entry whether it was a deliberate reference (e.g. a
-   pointer to the parent checkpoint — keep it) or a leaked identity
-   (rewrite to the child's, or remove).
+   script updated automatically. For `branch_experiment.py`, this is a
+   plain text search/replace over copied files, and the report lists
+   each file plus the replacement counts. If a retargeted copied string
+   was intentionally parent-facing, restore it explicitly and record why.
+2. **Source identity strings applied** — copied arbitrary strings that
+   contain the source's `exp-NNNN`, source slug, or
+   `exp-NNNN-source-slug` identity are retargeted automatically. The
+   point is that plain strings like `exp-0049` are not missed.
 3. **Inherited verbatim — audit each (keep | override | delete)** —
    every key the child took from the parent without any rewrite. The
    operator decides per key:
@@ -1354,9 +1340,9 @@ must:
 
 1. read the audit blocks in the prompt return as a *task list*, not
    informational output,
-2. for each "Parent-identity reference found", decide rewrite-or-keep
-   in conversation with the user (or autonomously when the call site
-   is unambiguous, e.g. a stale wandb tag),
+2. for each search/replace entry, confirm the copied reference should
+   be child-facing; if a copied reference should remain parent-facing,
+   restore it explicitly and record why,
 3. for each "Inherited verbatim" key, propose `keep | override |
    delete` with a one-line rationale, and apply the decision to
    `run_config.json` directly,
