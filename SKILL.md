@@ -2784,19 +2784,34 @@ for hyper-experiments:
 - **Smoke** (`OPENEVOLVE_SMOKE=1 uv run run-experiment`): validates
   scaffold without making any LLM call. The scaffolder's `--smoke`
   flag sets this automatically for evolve experiments.
-- **Required env**: `OPENAI_API_KEY` (used regardless of provider; set
-  `llm.api_base` in `config.yaml` to route to Gemini / a local model /
-  OptiLLM / etc.). Never commit the key.
+- **Required env**: `OPENAI_API_KEY` (used regardless of provider; the
+  default local ACP server usually ignores it, and `run_experiment.py`
+  fills a sentinel when unset). Never commit real provider keys.
 
 #### Prerequisite: the ACP-backed OpenAI-compatible server
 
 The default `code/config.yaml` points `llm.api_base` at
-`http://localhost:8000/v1` and names a `CLAUDE_*` model. That endpoint
+`http://localhost:8000/v1` and names `GEMINI_*` models. That endpoint
 is **not OpenAI** — it is the local OpenAI-compatible HTTP server
 provided by the **`acp-cdc-ai-python`** skill, which proxies
 chat-completion requests onto an Agent Client Protocol (ACP) wrapper
-around `claude code` (or `codex` / a local Ollama daemon, depending
-on the model prefix — `CLAUDE_*` / `OPEN_AI_*` / `OLLAMA_*`).
+around the selected backend CLI. The model prefix selects the route:
+`GEMINI_*` uses `gemini --acp`, `CLAUDE_*` uses `claude code`,
+`OPEN_AI_*` uses `codex`, and `OLLAMA_*` uses local Ollama via the
+Claude ACP wrapper.
+
+The default Gemini priority list intentionally avoids Pro models and
+matches the currently available Gemini CLI flash/lite choices:
+
+- `GEMINI_gemini-3-flash-preview`
+- `GEMINI_gemini-3.1-flash-lite-preview`
+- `GEMINI_gemini-2.5-flash`
+- `GEMINI_gemini-2.5-flash-lite`
+
+`run_experiment.py` probes the local server's `/v1/models` endpoint
+before starting OpenEvolve, prints the configured priority list and the
+server-advertised model ids, and exits with a clear error if
+`config.yaml` names a model the ACP server does not advertise.
 
 This skill declares `acp-cdc-ai-python` as a `skill_references` entry
 in `skill-manager.toml`, so installing hyper-experiments via

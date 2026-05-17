@@ -64,9 +64,11 @@ config / prompt / seed).
    conversation JSONL traces belong in `data/acp-openai-server/jsonl/`;
    server stdout/stderr belong in `data/acp-openai-server/process/`.
    See SKILL.md > "Prerequisite: the ACP-backed OpenAI-compatible
-   server" for the full rationale (chain-of-custody, why the model
-   string carries the `CLAUDE_*` prefix, how to re-point at a paid
-   provider).
+   server" for the full rationale (chain-of-custody, why Gemini models
+   are written as `GEMINI_<gemini-cli-model-name>`, how to re-point at
+   another backend/provider). `run_experiment.py` probes `/v1/models`
+   before OpenEvolve starts and fails clearly if `config.yaml` names a
+   model the ACP server does not advertise.
 2. **Database policy.** This experiment's openevolve database lives
    at `logs/openevolve_output/` and is isolated from every other
    experiment's database. `run_config.json`'s

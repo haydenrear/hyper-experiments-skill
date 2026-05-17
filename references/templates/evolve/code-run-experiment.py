@@ -70,6 +70,8 @@ import asyncio
 import json
 import os
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from python_exp import hello
@@ -226,6 +228,68 @@ def _bind_local_api_base_to_acp_server(cfg, server_info: dict | None) -> str | N
     return api_base
 
 
+def _configured_model_names(cfg) -> list[str]:
+    names = []
+    for model in getattr(cfg.llm, "models", []) or []:
+        name = getattr(model, "name", None) or getattr(model, "model", None)
+        if name is None and isinstance(model, dict):
+            name = model.get("name") or model.get("model")
+        if name is not None:
+            names.append(str(name))
+    return names
+
+
+def _server_model_ids(api_base: str | None) -> list[str] | None:
+    if not api_base:
+        return None
+    url = api_base.rstrip("/") + "/models"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as e:
+        print(f"warning: could not query {url} for available models: {e}",
+              file=sys.stderr)
+        return None
+    data = payload.get("data", []) if isinstance(payload, dict) else []
+    ids = []
+    for item in data:
+        if isinstance(item, dict) and item.get("id"):
+            ids.append(str(item["id"]))
+    return ids
+
+
+def _validate_configured_models(api_base: str | None, cfg) -> None:
+    configured = _configured_model_names(cfg)
+    print("openevolve: configured model priority:")
+    for name in configured:
+        print(f"  - {name}")
+
+    available = _server_model_ids(api_base)
+    if available is None:
+        return
+    print("openevolve: ACP/server available models:")
+    for name in available:
+        print(f"  - {name}")
+    available_set = set(available)
+    missing = [name for name in configured if name not in available_set]
+    if missing:
+        print(
+            "error: config.yaml names model(s) the ACP/OpenAI-compatible "
+            "server did not advertise:",
+            file=sys.stderr,
+        )
+        for name in missing:
+            print(f"  - {name}", file=sys.stderr)
+        print(
+            "       Update code/config.yaml llm.models to one of the "
+            "available model ids above. For Gemini through acp-cdc-ai-python, "
+            "use the GEMINI_ prefix plus the Gemini CLI model name, e.g. "
+            "GEMINI_gemini-2.5-flash.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+
 def _ensure_api_key_for_local(api_base: str | None) -> None:
     """Default `OPENAI_API_KEY` to a sentinel when api_base points at a
     local server and no key is set. Local OpenAI-compatible servers
@@ -275,6 +339,7 @@ async def _run_evolution(run_config: dict) -> int:
     api_base = getattr(cfg.llm, "api_base", None)
     server_info = _check_acp_server(api_base)
     api_base = _bind_local_api_base_to_acp_server(cfg, server_info)
+    _validate_configured_models(api_base, cfg)
     _ensure_api_key_for_local(api_base)
     iterations = oe_cfg.get("iterations") or cfg.max_iterations
     target_score = oe_cfg.get("target_score")

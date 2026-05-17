@@ -38,7 +38,12 @@ def _model_priority() -> list[str]:
     raw = os.environ.get("TEST_GRAPH_GEMINI_MODELS", "").strip()
     if raw:
         return [part.strip() for part in raw.split(",") if part.strip()]
-    return ["GEMINI_gemini-2.5-pro", "GEMINI_gemini-2.5-flash"]
+    return [
+        "GEMINI_gemini-3-flash-preview",
+        "GEMINI_gemini-3.1-flash-lite-preview",
+        "GEMINI_gemini-2.5-flash",
+        "GEMINI_gemini-2.5-flash-lite",
+    ]
 
 
 @node(SPEC)
