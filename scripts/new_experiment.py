@@ -30,7 +30,9 @@ from pathlib import Path
 
 from _lib import (
     DEFAULT_VARIANT,
+    ProjectLockError,
     VALID_VARIANTS,
+    acquire_project_lock,
     allocate_experiment_id,
     bullet_list,
     find_experiment_dir,
@@ -87,6 +89,119 @@ EXTRA_CODE_FILES_BY_VARIANT = {
         "code/prompt-templates/diff_user.txt": "code-prompt-templates-diff_user.txt",
     },
 }
+
+
+def _scaffold_experiment(args, *, root: Path, variant: str) -> dict:
+    exp_id = allocate_experiment_id(root)
+    slug = slugify(args.title)
+    family_dir = root / "experiments" / "families" / args.family
+    family_dir.mkdir(parents=True, exist_ok=True)
+
+    family_index = family_dir / "index.md"
+    if not family_index.exists():
+        family_index.write_text(render_template(
+            load_template("family-index.md"),
+            {"family": args.family, "created_at": utcnow_iso()},
+        ))
+
+    family_baselines = family_dir / "baselines"
+    family_baselines.mkdir(exist_ok=True)
+    family_baselines_index = family_baselines / "index.md"
+    if not family_baselines_index.exists():
+        family_baselines_index.write_text(render_template(
+            load_template("family-baselines-index.md"),
+            {"family": args.family, "created_at": utcnow_iso()},
+        ))
+
+    exp_dir = family_dir / f"{exp_id}-{slug}"
+    if exp_dir.exists():
+        raise ProjectLockError(
+            f"experiment id {exp_id} already exists; another agent likely "
+            f"allocated it concurrently. Retry the command to allocate the next id."
+        )
+    exp_dir.mkdir()
+    for sub in SUBDIRS:
+        (exp_dir / sub).mkdir()
+    (exp_dir / "artifacts").mkdir()
+    (exp_dir / "data").mkdir()
+    for sub in DATA_SUBDIRS:
+        (exp_dir / "data" / sub).mkdir()
+    if variant == "evolve":
+        for sub in EVOLVE_DATA_SUBDIRS:
+            (exp_dir / "data" / sub).mkdir(parents=True)
+
+    parent_dir_rel = "null"
+    if args.parent:
+        p = find_experiment_dir(root, args.parent)
+        if p is not None:
+            parent_dir_rel = str(p.relative_to(root))
+        else:
+            print(f"warning: parent {args.parent} not found under experiments/families/",
+                  file=sys.stderr)
+
+    iteration_delta_oneline = args.delta[0] if args.delta else "TODO"
+
+    vars_ = {
+        "experiment_id": exp_id,
+        "slug": slug,
+        "title": args.title,
+        "family": args.family,
+        "variant": variant,
+        "status": "planned",
+        "created_at": utcnow_iso(),
+        "experiment_type": args.exp_type,
+        "iteration_delta_oneline": iteration_delta_oneline,
+        "research_question": args.question or "TODO",
+        "parent_experiment": args.parent or "null",
+        "parent_checkpoint": args.checkpoint or "null",
+        "parent_directory": parent_dir_rel,
+        "ancestor_baseline": args.ancestor or "null",
+        "counterfactual_delta": bullet_list(args.delta) or "- TODO",
+        "invariants": bullet_list(args.invariant) or "- TODO",
+        "command": args.command or "TODO",
+        "branched_from": "null",
+        "branched_at": "null",
+        "branch_copied_files": "null",
+    }
+
+    for out_name, tmpl_name in FILE_TEMPLATES.items():
+        (exp_dir / out_name).write_text(
+            render_template(load_template(tmpl_name, variant=variant), vars_)
+        )
+    for out_name, tmpl_name in {**ARTIFACT_FILES, **DATA_FILES, **CODE_FILES}.items():
+        (exp_dir / out_name).write_text(
+            render_template(load_template(tmpl_name, variant=variant), vars_)
+        )
+    for out_name, tmpl_name in EXTRA_CODE_FILES_BY_VARIANT.get(variant, {}).items():
+        (exp_dir / out_name).parent.mkdir(parents=True, exist_ok=True)
+        (exp_dir / out_name).write_text(
+            render_template(load_template(tmpl_name, variant=variant), vars_)
+        )
+
+    run_config_renames = _write_run_config(
+        exp_dir=exp_dir, root=root, parent_id=args.parent,
+        child_vars=vars_, variant=variant,
+    )
+
+    try:
+        vendor_prov = vendor_python_exp_from_tools(
+            root / "tools" / "python_exp",
+            exp_dir / "code",
+        )
+    except (FileNotFoundError, FileExistsError, ValueError) as e:
+        import shutil as _shutil
+        _shutil.rmtree(exp_dir, ignore_errors=True)
+        raise ProjectLockError(
+            f"vendoring python_exp failed: {e}\n"
+            f"       scaffolded experiment directory was rolled back."
+        ) from e
+
+    return {
+        "exp_id": exp_id,
+        "exp_dir": exp_dir,
+        "run_config_renames": run_config_renames,
+        "vendor_prov": vendor_prov,
+    }
 
 
 def _write_run_config(*, exp_dir: Path, root: Path, parent_id, child_vars, variant):
@@ -263,6 +378,16 @@ def main() -> int:
                          "`default` = PyTorch + tensorboard scaffold; "
                          "`evolve` = OpenEvolve loop scaffold (initial_program.py, "
                          "evaluator.py, config.yaml in code/).")
+    ap.add_argument("--lock-timeout", type=float, default=30.0,
+                    help="Seconds to wait for the git-backed project lock "
+                         "before failing with retry guidance (default: 30).")
+    ap.add_argument("--lock-stale-after", type=float, default=900.0,
+                    help="Seconds after which a held project lock may be "
+                         "stolen as stale (default: 900).")
+    ap.add_argument("--no-wait-lock", "--fail-if-locked",
+                    dest="no_wait_lock", action="store_true",
+                    help="Try the git-backed project lock once and fail "
+                         "immediately if another process holds it.")
     args = ap.parse_args()
 
     if args.exp_type == "iteration" and not args.parent:
@@ -296,107 +421,23 @@ def main() -> int:
     project_default_variant = project_variant_from_marker(root)
     variant = args.variant or project_default_variant
 
-    exp_id = allocate_experiment_id(root)
-    slug = slugify(args.title)
-    family_dir = root / "experiments" / "families" / args.family
-    family_dir.mkdir(parents=True, exist_ok=True)
-
-    family_index = family_dir / "index.md"
-    if not family_index.exists():
-        family_index.write_text(render_template(
-            load_template("family-index.md"),
-            {"family": args.family, "created_at": utcnow_iso()},
-        ))
-
-    family_baselines = family_dir / "baselines"
-    family_baselines.mkdir(exist_ok=True)
-    family_baselines_index = family_baselines / "index.md"
-    if not family_baselines_index.exists():
-        family_baselines_index.write_text(render_template(
-            load_template("family-baselines-index.md"),
-            {"family": args.family, "created_at": utcnow_iso()},
-        ))
-
-    exp_dir = family_dir / f"{exp_id}-{slug}"
-    if exp_dir.exists():
-        print(f"error: {exp_dir} already exists", file=sys.stderr)
-        return 1
-    exp_dir.mkdir()
-    for sub in SUBDIRS:
-        (exp_dir / sub).mkdir()
-    (exp_dir / "artifacts").mkdir()
-    (exp_dir / "data").mkdir()
-    for sub in DATA_SUBDIRS:
-        (exp_dir / "data" / sub).mkdir()
-    if variant == "evolve":
-        for sub in EVOLVE_DATA_SUBDIRS:
-            (exp_dir / "data" / sub).mkdir(parents=True)
-
-    parent_dir_rel = "null"
-    if args.parent:
-        p = find_experiment_dir(root, args.parent)
-        if p is not None:
-            parent_dir_rel = str(p.relative_to(root))
-        else:
-            print(f"warning: parent {args.parent} not found under experiments/families/",
-                  file=sys.stderr)
-
-    iteration_delta_oneline = args.delta[0] if args.delta else "TODO"
-
-    vars_ = {
-        "experiment_id": exp_id,
-        "slug": slug,
-        "title": args.title,
-        "family": args.family,
-        "variant": variant,
-        "status": "planned",
-        "created_at": utcnow_iso(),
-        "experiment_type": args.exp_type,
-        "iteration_delta_oneline": iteration_delta_oneline,
-        "research_question": args.question or "TODO",
-        "parent_experiment": args.parent or "null",
-        "parent_checkpoint": args.checkpoint or "null",
-        "parent_directory": parent_dir_rel,
-        "ancestor_baseline": args.ancestor or "null",
-        "counterfactual_delta": bullet_list(args.delta) or "- TODO",
-        "invariants": bullet_list(args.invariant) or "- TODO",
-        "command": args.command or "TODO",
-        "branched_from": "null",
-        "branched_at": "null",
-        "branch_copied_files": "null",
-    }
-
-    for out_name, tmpl_name in FILE_TEMPLATES.items():
-        (exp_dir / out_name).write_text(
-            render_template(load_template(tmpl_name, variant=variant), vars_)
-        )
-    for out_name, tmpl_name in {**ARTIFACT_FILES, **DATA_FILES, **CODE_FILES}.items():
-        (exp_dir / out_name).write_text(
-            render_template(load_template(tmpl_name, variant=variant), vars_)
-        )
-    for out_name, tmpl_name in EXTRA_CODE_FILES_BY_VARIANT.get(variant, {}).items():
-        (exp_dir / out_name).parent.mkdir(parents=True, exist_ok=True)
-        (exp_dir / out_name).write_text(
-            render_template(load_template(tmpl_name, variant=variant), vars_)
-        )
-
-    run_config_renames = _write_run_config(
-        exp_dir=exp_dir, root=root, parent_id=args.parent,
-        child_vars=vars_, variant=variant,
-    )
-
     try:
-        vendor_prov = vendor_python_exp_from_tools(
-            root / "tools" / "python_exp",
-            exp_dir / "code",
-        )
-    except (FileNotFoundError, FileExistsError, ValueError) as e:
-        import shutil as _shutil
-        _shutil.rmtree(exp_dir, ignore_errors=True)
-        print(f"error: vendoring python_exp failed: {e}", file=sys.stderr)
-        print(f"       scaffolded experiment directory was rolled back.",
-              file=sys.stderr)
+        with acquire_project_lock(
+            root,
+            "scaffold-project-state",
+            timeout_seconds=args.lock_timeout,
+            wait=not args.no_wait_lock,
+            stale_after_seconds=args.lock_stale_after,
+        ):
+            scaffold = _scaffold_experiment(args, root=root, variant=variant)
+    except ProjectLockError as e:
+        print(f"error: {e}", file=sys.stderr)
         return 1
+
+    exp_id = scaffold["exp_id"]
+    exp_dir = scaffold["exp_dir"]
+    run_config_renames = scaffold["run_config_renames"]
+    vendor_prov = scaffold["vendor_prov"]
 
     rel = exp_dir.relative_to(root)
     print(f"Created {exp_id} at {rel}")

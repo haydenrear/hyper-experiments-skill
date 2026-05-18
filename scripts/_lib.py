@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
+import sys
+import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,6 +29,260 @@ DEFAULT_VARIANT = "default"
 # evolve `run_config.json` template at `paths.openevolve_output`.
 OPENEVOLVE_DB_REL = Path("logs/openevolve_output")
 _OPENEVOLVE_CHECKPOINT_RE = re.compile(r"^checkpoint_(\d+)$")
+_ZERO_OID = "0" * 40
+
+
+class ProjectLockError(RuntimeError):
+    """Raised when a project-scoped git lock cannot be acquired or released."""
+
+
+class GitProjectLock:
+    """A project-scoped lock backed by an atomic git ref update.
+
+    The ref points at a small blob containing owner metadata. `git update-ref`
+    is the compare-and-swap primitive: acquisition creates the ref only if it
+    does not exist, stale stealing replaces only the exact observed owner, and
+    release deletes only if this process still owns the ref.
+    """
+
+    def __init__(
+        self,
+        *,
+        git_dir: Path,
+        ref: str,
+        oid: str,
+        metadata: dict,
+    ) -> None:
+        self.git_dir = git_dir
+        self.ref = ref
+        self.oid = oid
+        self.metadata = metadata
+        self._released = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        proc = _git(
+            self.git_dir,
+            ["update-ref", "-d", self.ref, self.oid],
+            check=False,
+        )
+        self._released = True
+        if proc.returncode != 0:
+            raise ProjectLockError(
+                f"could not release project lock {self.ref}; "
+                f"it may have expired or been stolen. git said: "
+                f"{proc.stderr.strip() or proc.stdout.strip()}"
+            )
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        try:
+            self.release()
+        except ProjectLockError as e:
+            if exc_type is not None:
+                print(f"warning: {e}", file=sys.stderr)
+                return
+            raise
+
+
+def _git(cwd: Path, args: list[str], *, input_text: str | None = None,
+         check: bool = True) -> subprocess.CompletedProcess:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(cwd), *args],
+            input=input_text,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except FileNotFoundError as e:
+        raise ProjectLockError("git executable not found; project locks require git") from e
+    except subprocess.SubprocessError as e:
+        raise ProjectLockError(f"git {' '.join(args)} failed: {e}") from e
+    if check and proc.returncode != 0:
+        msg = proc.stderr.strip() or proc.stdout.strip()
+        raise ProjectLockError(f"git {' '.join(args)} failed: {msg}")
+    return proc
+
+
+def _git_toplevel(root: Path) -> Path:
+    proc = _git(root, ["rev-parse", "--show-toplevel"], check=False)
+    if proc.returncode != 0:
+        msg = proc.stderr.strip() or proc.stdout.strip()
+        raise ProjectLockError(
+            f"{root} is not inside a git worktree; hyper-experiments "
+            f"project locks are git-backed. Initialize or enter a git "
+            f"worktree before running this script. git said: {msg}"
+        )
+    return Path(proc.stdout.strip()).resolve()
+
+
+def _project_lock_ref(git_top: Path, root: Path, name: str) -> str:
+    try:
+        project_id_source = root.resolve().relative_to(git_top)
+    except ValueError:
+        project_id_source = root.resolve()
+    project_id = hashlib.sha1(str(project_id_source).encode("utf-8")).hexdigest()[:16]
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip(".-/") or "project"
+    return f"refs/hyper-experiments/locks/{project_id}/{safe_name}"
+
+
+def _write_lock_blob(git_top: Path, metadata: dict) -> str:
+    payload = json.dumps(metadata, sort_keys=True, indent=2) + "\n"
+    proc = _git(git_top, ["hash-object", "-w", "--stdin"], input_text=payload)
+    return proc.stdout.strip()
+
+
+def _read_lock_metadata(git_top: Path, oid: str | None) -> dict:
+    if not oid:
+        return {}
+    proc = _git(git_top, ["cat-file", "-p", oid], check=False)
+    if proc.returncode != 0:
+        return {}
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {}
+
+
+def _lock_holder_summary(metadata: dict, oid: str | None) -> str:
+    if not metadata:
+        return oid or "unknown owner"
+    host = metadata.get("host", "unknown-host")
+    pid = metadata.get("pid", "unknown-pid")
+    acquired = metadata.get("acquired_at", "unknown-time")
+    token = str(metadata.get("token", ""))[:8]
+    suffix = f", token {token}" if token else ""
+    return f"{host} pid {pid}, acquired {acquired}{suffix}"
+
+
+def acquire_project_lock(
+    root: Path,
+    name: str,
+    *,
+    timeout_seconds: float = 30.0,
+    wait: bool = True,
+    stale_after_seconds: float = 900.0,
+) -> GitProjectLock:
+    """Acquire a project-scoped lock using an atomic git ref.
+
+    The lock is visible to every process using the same git worktree/repository.
+    It fails after `timeout_seconds` unless `wait` is false, in which case it
+    makes one attempt and returns a retryable error.
+    """
+    root = root.resolve()
+    git_top = _git_toplevel(root)
+    ref = _project_lock_ref(git_top, root, name)
+    now = time.time()
+    metadata = {
+        "project_root": str(root),
+        "lock": name,
+        "ref": ref,
+        "token": uuid.uuid4().hex,
+        "pid": os.getpid(),
+        "host": socket.gethostname(),
+        "acquired_at": utcnow_iso(),
+        "acquired_at_epoch": now,
+        "stale_after_seconds": stale_after_seconds,
+    }
+    oid = _write_lock_blob(git_top, metadata)
+    deadline = time.monotonic() + max(timeout_seconds, 0.0)
+
+    while True:
+        proc = _git(
+            git_top,
+            ["update-ref", "--create-reflog", ref, oid, _ZERO_OID],
+            check=False,
+        )
+        if proc.returncode == 0:
+            return GitProjectLock(git_dir=git_top, ref=ref, oid=oid, metadata=metadata)
+
+        current_proc = _git(git_top, ["rev-parse", "-q", "--verify", ref], check=False)
+        current_oid = current_proc.stdout.strip() if current_proc.returncode == 0 else None
+        holder = _read_lock_metadata(git_top, current_oid)
+        holder_age = time.time() - float(holder.get("acquired_at_epoch", time.time()))
+
+        if stale_after_seconds > 0 and holder_age > stale_after_seconds and current_oid:
+            steal = _git(
+                git_top,
+                ["update-ref", "-m", "steal stale hyper-experiments lock",
+                 ref, oid, current_oid],
+                check=False,
+            )
+            if steal.returncode == 0:
+                return GitProjectLock(git_dir=git_top, ref=ref, oid=oid, metadata=metadata)
+
+        timed_out = (not wait) or time.monotonic() >= deadline
+        if timed_out:
+            raise ProjectLockError(
+                f"project lock {name!r} is held by "
+                f"{_lock_holder_summary(holder, current_oid)}. Retry the "
+                f"command, increase --lock-timeout, or use --lock-stale-after "
+                f"only after confirming the owner died."
+            )
+        time.sleep(0.25)
+
+
+def project_lock_status(root: Path, name: str) -> dict:
+    """Return the current git-backed lock status for `name`."""
+    root = root.resolve()
+    git_top = _git_toplevel(root)
+    ref = _project_lock_ref(git_top, root, name)
+    current_proc = _git(git_top, ["rev-parse", "-q", "--verify", ref], check=False)
+    if current_proc.returncode != 0:
+        return {"locked": False, "ref": ref, "oid": None, "metadata": {}}
+    oid = current_proc.stdout.strip()
+    return {
+        "locked": True,
+        "ref": ref,
+        "oid": oid,
+        "metadata": _read_lock_metadata(git_top, oid),
+    }
+
+
+def release_project_lock(
+    root: Path,
+    name: str,
+    *,
+    token: str | None = None,
+    force: bool = False,
+) -> dict:
+    """Release a project lock by token, or force-release it explicitly.
+
+    Normal releases require the owner token printed by `project_lock.py acquire`.
+    `force=True` is for operator cleanup after confirming the owner process died.
+    """
+    root = root.resolve()
+    git_top = _git_toplevel(root)
+    status = project_lock_status(root, name)
+    if not status["locked"]:
+        return status
+
+    metadata = status["metadata"]
+    expected = metadata.get("token")
+    if not force and (not token or token != expected):
+        raise ProjectLockError(
+            f"refusing to release project lock {name!r}: owner token does not "
+            f"match. Use the token printed by acquire, or pass --force after "
+            f"confirming the owner died."
+        )
+
+    proc = _git(
+        git_top,
+        ["update-ref", "-d", status["ref"], status["oid"]],
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise ProjectLockError(
+            f"could not release project lock {name!r}; it may have changed. "
+            f"git said: {proc.stderr.strip() or proc.stdout.strip()}"
+        )
+    status["released"] = True
+    return status
 
 
 def openevolve_db_dir(exp_dir: Path) -> Path:

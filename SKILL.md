@@ -114,7 +114,25 @@ pattern.
 
 ## Tooling
 
-Two scaffolding scripts ship with this skill.
+Several project scripts ship with this skill.
+
+### `scripts/project_lock.py` — git-backed project locks for shared mutations
+
+Provides the reusable lock CLI used by the scaffolders and by any project
+wrapper that mutates shared parent files:
+
+```bash
+python scripts/project_lock.py status --root .
+python scripts/project_lock.py run --root . --name shared-ledger -- <command>
+python scripts/project_lock.py acquire --root . --name shared-ledger
+python scripts/project_lock.py release --root . --name shared-ledger --token <token>
+```
+
+The implementation lives in `scripts/_lib.py` so other scripts can import
+`acquire_project_lock`, while `project_lock.py` is the stable command-line
+surface for other skills or project-local orchestration. See
+[`references/multi-agent.md`](references/multi-agent.md) for the directory
+ownership model and retry contract.
 
 ### `scripts/init_project.py` — bootstrap a new hyper-experiments project
 

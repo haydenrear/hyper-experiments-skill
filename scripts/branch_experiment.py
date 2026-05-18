@@ -56,6 +56,8 @@ import sys
 from pathlib import Path
 
 from _lib import (
+    ProjectLockError,
+    acquire_project_lock,
     allocate_experiment_id,
     bullet_list,
     experiment_variant_from_run_config,
@@ -338,69 +340,7 @@ def _inherit_openevolve_db(
             "relative": relative, "iteration": iteration}
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--experiments-root", type=Path, default=None,
-                    help="Project root (contains hyper-experiments.md). "
-                         "Auto-detected from cwd if omitted.")
-    ap.add_argument("--from", dest="source", required=True,
-                    help="Source experiment id to deep-copy (e.g. exp-0003).")
-    ap.add_argument("--title", required=True,
-                    help="Short human-readable title; used for the slug.")
-    ap.add_argument("--family", default=None,
-                    help="Target family. Defaults to the source experiment's family.")
-    ap.add_argument("--question", default="",
-                    help="Research question this branched experiment tests.")
-    ap.add_argument("--parent", default=None,
-                    help="Lineage parent id. Defaults to --from. Set if the "
-                         "conceptual counterfactual parent differs from the "
-                         "experiment being deep-copied.")
-    ap.add_argument("--checkpoint", default=None,
-                    help="Parent checkpoint path to resume from.")
-    ap.add_argument("--ancestor", default=None,
-                    help="Ancestor baseline experiment id, if distinct from --parent.")
-    ap.add_argument("--delta", action="append", default=[],
-                    help="Counterfactual change in form 'key: old -> new'. Repeatable.")
-    ap.add_argument("--invariant", action="append", default=[],
-                    help="Declared invariant. Repeatable.")
-    ap.add_argument("--command", default="",
-                    help="Exact launch command. Defaults to TODO.")
-    ap.add_argument("--description", default=None,
-                    help="Description for code/pyproject.toml. If omitted, the "
-                         "parent's description is kept verbatim — pass this when "
-                         "the child needs a distinct one-line description (e.g. "
-                         "'exp-XXXX sibling: <delta>').")
-    ap.add_argument("--new-openevolve-database", action="store_true",
-                    help="(evolve variant only) Skip inheriting the source's "
-                         "openevolve database. By default the child's "
-                         "`run_config.json:openevolve.checkpoint_resume` is "
-                         "set to the source's latest `checkpoint_N/` so the "
-                         "MAP-Elites search continues seeded from the parent. "
-                         "Pass this flag when the counterfactual delta "
-                         "invalidates the parent's search state (e.g. swapping "
-                         "initial_program.py, changing the evaluator contract, "
-                         "or restructuring config.yaml's database block).")
-    args = ap.parse_args()
-
-    if args.experiments_root is not None:
-        root = args.experiments_root.resolve()
-        if not (root / "hyper-experiments.md").exists():
-            print(f"error: {root} does not contain hyper-experiments.md",
-                  file=sys.stderr)
-            return 1
-    else:
-        root = find_experiments_root(Path.cwd())
-        if root is None:
-            print("error: could not find hyper-experiments.md by walking up from cwd.",
-                  file=sys.stderr)
-            return 1
-
-    source_dir = find_experiment_dir(root, args.source)
-    if source_dir is None:
-        print(f"error: source experiment {args.source} not found under "
-              f"experiments/families/", file=sys.stderr)
-        return 1
-
+def _branch_experiment(args, *, root: Path, source_dir: Path) -> dict:
     # Variant is inherited from the source experiment — branching is
     # variant-blind by construction (it deep-copies whatever the parent
     # had in code/). We just propagate the value into freshly-rendered
@@ -440,8 +380,10 @@ def main() -> int:
 
     exp_dir = family_dir / f"{exp_id}-{slug}"
     if exp_dir.exists():
-        print(f"error: {exp_dir} already exists", file=sys.stderr)
-        return 1
+        raise ProjectLockError(
+            f"experiment id {exp_id} already exists; another agent likely "
+            f"allocated it concurrently. Retry the command to allocate the next id."
+        )
     exp_dir.mkdir()
 
     # 1. Deep-copy code/ (includes run_config.json, pyproject.toml, vendored/, etc.)
@@ -520,11 +462,10 @@ def main() -> int:
         )
     except (FileNotFoundError, RuntimeError, ValueError) as e:
         shutil.rmtree(exp_dir, ignore_errors=True)
-        print(f"error: vendored python_exp inheritance failed: {e}",
-              file=sys.stderr)
-        print(f"       scaffolded experiment directory was rolled back.",
-              file=sys.stderr)
-        return 1
+        raise ProjectLockError(
+            f"vendored python_exp inheritance failed: {e}\n"
+            f"       scaffolded experiment directory was rolled back."
+        ) from e
 
     # 6. Run the branch retargeting as plain search/replace over copied text
     #    files. This intentionally includes JSON as text: full source
@@ -559,6 +500,119 @@ def main() -> int:
             new_database=args.new_openevolve_database,
             root=root,
         )
+
+    return {
+        "exp_id": exp_id,
+        "exp_dir": exp_dir,
+        "purged_cruft": purged_cruft,
+        "vendor_prov": vendor_prov,
+        "source_config_path": source_config_path,
+        "text_file_rewrites": text_file_rewrites,
+        "openevolve_db_report": openevolve_db_report,
+        "branched_at": branched_at,
+        "family": family,
+        "variant": variant,
+        "parent_id": parent_id,
+    }
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--experiments-root", type=Path, default=None,
+                    help="Project root (contains hyper-experiments.md). "
+                         "Auto-detected from cwd if omitted.")
+    ap.add_argument("--from", dest="source", required=True,
+                    help="Source experiment id to deep-copy (e.g. exp-0003).")
+    ap.add_argument("--title", required=True,
+                    help="Short human-readable title; used for the slug.")
+    ap.add_argument("--family", default=None,
+                    help="Target family. Defaults to the source experiment's family.")
+    ap.add_argument("--question", default="",
+                    help="Research question this branched experiment tests.")
+    ap.add_argument("--parent", default=None,
+                    help="Lineage parent id. Defaults to --from. Set if the "
+                         "conceptual counterfactual parent differs from the "
+                         "experiment being deep-copied.")
+    ap.add_argument("--checkpoint", default=None,
+                    help="Parent checkpoint path to resume from.")
+    ap.add_argument("--ancestor", default=None,
+                    help="Ancestor baseline experiment id, if distinct from --parent.")
+    ap.add_argument("--delta", action="append", default=[],
+                    help="Counterfactual change in form 'key: old -> new'. Repeatable.")
+    ap.add_argument("--invariant", action="append", default=[],
+                    help="Declared invariant. Repeatable.")
+    ap.add_argument("--command", default="",
+                    help="Exact launch command. Defaults to TODO.")
+    ap.add_argument("--description", default=None,
+                    help="Description for code/pyproject.toml. If omitted, the "
+                         "parent's description is kept verbatim — pass this when "
+                         "the child needs a distinct one-line description (e.g. "
+                         "'exp-XXXX sibling: <delta>').")
+    ap.add_argument("--new-openevolve-database", action="store_true",
+                    help="(evolve variant only) Skip inheriting the source's "
+                         "openevolve database. By default the child's "
+                         "`run_config.json:openevolve.checkpoint_resume` is "
+                         "set to the source's latest `checkpoint_N/` so the "
+                         "MAP-Elites search continues seeded from the parent. "
+                         "Pass this flag when the counterfactual delta "
+                         "invalidates the parent's search state (e.g. swapping "
+                         "initial_program.py, changing the evaluator contract, "
+                         "or restructuring config.yaml's database block).")
+    ap.add_argument("--lock-timeout", type=float, default=30.0,
+                    help="Seconds to wait for the git-backed project lock "
+                         "before failing with retry guidance (default: 30).")
+    ap.add_argument("--lock-stale-after", type=float, default=900.0,
+                    help="Seconds after which a held project lock may be "
+                         "stolen as stale (default: 900).")
+    ap.add_argument("--no-wait-lock", "--fail-if-locked",
+                    dest="no_wait_lock", action="store_true",
+                    help="Try the git-backed project lock once and fail "
+                         "immediately if another process holds it.")
+    args = ap.parse_args()
+
+    if args.experiments_root is not None:
+        root = args.experiments_root.resolve()
+        if not (root / "hyper-experiments.md").exists():
+            print(f"error: {root} does not contain hyper-experiments.md",
+                  file=sys.stderr)
+            return 1
+    else:
+        root = find_experiments_root(Path.cwd())
+        if root is None:
+            print("error: could not find hyper-experiments.md by walking up from cwd.",
+                  file=sys.stderr)
+            return 1
+
+    source_dir = find_experiment_dir(root, args.source)
+    if source_dir is None:
+        print(f"error: source experiment {args.source} not found under "
+              f"experiments/families/", file=sys.stderr)
+        return 1
+
+    try:
+        with acquire_project_lock(
+            root,
+            "scaffold-project-state",
+            timeout_seconds=args.lock_timeout,
+            wait=not args.no_wait_lock,
+            stale_after_seconds=args.lock_stale_after,
+        ):
+            branch = _branch_experiment(args, root=root, source_dir=source_dir)
+    except ProjectLockError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    exp_id = branch["exp_id"]
+    exp_dir = branch["exp_dir"]
+    purged_cruft = branch["purged_cruft"]
+    vendor_prov = branch["vendor_prov"]
+    source_config_path = branch["source_config_path"]
+    text_file_rewrites = branch["text_file_rewrites"]
+    openevolve_db_report = branch["openevolve_db_report"]
+    branched_at = branch["branched_at"]
+    family = branch["family"]
+    variant = branch["variant"]
+    parent_id = branch["parent_id"]
 
     rel = exp_dir.relative_to(root)
     print(f"Branched {args.source} -> {exp_id} at {rel}")
