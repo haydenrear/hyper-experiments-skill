@@ -2696,6 +2696,7 @@ Concrete markdown templates for every required file live in `references/template
 - `evolve/code-openevolve-db.py` → `code/openevolve_db.py` (database inspector; `uv run openevolve-db status|latest-checkpoint|list`)
 - `evolve/code-prompt-templates-diff_user.txt` → `code/prompt-templates/diff_user.txt` (strict diff-only mutation prompt)
 - `evolve/artifacts-agents.md` → `artifacts/AGENTS.md` (variant-specific override)
+- `openevolve-agentic-fitness/*` → same OpenEvolve code scaffold as `evolve`, with `config.yaml` enabling agentic fitness research reranking and `run_config.json["variant"] = "openevolve-agentic-fitness"`
 - `tools-python-exp-pyproject.toml` → `tools/python_exp/pyproject.toml` (written by `init_project.py`)
 - `tools-python-exp-init.py` → `tools/python_exp/src/python_exp/__init__.py` (written by `init_project.py`)
 - `project-scripts-new-experiment.py` → `<root>/scripts/new_experiment.py` (project-local wrapper, written by `init_project.py`)
@@ -2722,17 +2723,18 @@ like `artifacts/AGENTS.md`); everything else — the lineage object
 model, the chain-of-reasoning protocol, the freeze procedure, the
 indexes — is identical across variants.
 
-The two variants today:
+The variants today:
 
 | Variant   | Purpose                                                                 | Distinct files in `code/`                                                                |
 |-----------|-------------------------------------------------------------------------|------------------------------------------------------------------------------------------|
 | `default` | Conventional ML run (PyTorch + tensorboard + custom train loop).        | `pyproject.toml`, `run_experiment.py`, `run_config.json`, `check_regressions.py`.        |
 | `evolve`  | OpenEvolve evolutionary loop (LLM mutates a seed program iteratively).  | All of the above plus `initial_program.py`, `evaluator.py`, `config.yaml`, `openevolve_db.py`. `pyproject.toml` depends on `openevolve` instead of `torch`, registers an `openevolve-db` console script, and the default `config.yaml`'s `llm.api_base` expects the `acp-cdc-ai-python` skill's local OpenAI-compatible server to be running. |
+| `openevolve-agentic-fitness` | OpenEvolve loop with ACP-backed agentic fitness research reranking. | Same OpenEvolve files as `evolve`, but `config.yaml` defaults to `GEMINI_gemini-2.5-flash`, enables `fitness.algo: agentic`, writes score research events to `logs/fitness_events/`, and creates a fresh ACP harness session per research epoch. |
 
 **Where the variant is stored:**
 
 - Project default — `<root>/hyper-experiments.md`'s `Variant:` line. Set
-  by `init_project.py --variant {default|evolve}` (default `default`).
+  by `init_project.py --variant {default|evolve|openevolve-agentic-fitness}` (default `default`).
   `new_experiment.py` reads this when no `--variant` is passed.
 - Per-experiment — `code/run_config.json`'s `"variant"` field. Surfaced
   in `index.md` for visibility. Branched experiments inherit this from

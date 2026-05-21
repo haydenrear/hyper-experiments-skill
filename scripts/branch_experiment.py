@@ -56,6 +56,7 @@ import sys
 from pathlib import Path
 
 from _lib import (
+    OPENEVOLVE_VARIANTS,
     ProjectLockError,
     acquire_project_lock,
     allocate_experiment_id,
@@ -397,7 +398,7 @@ def _branch_experiment(args, *, root: Path, source_dir: Path) -> dict:
     (exp_dir / "data" / "generated").mkdir(exist_ok=True)
     _copy_file(source_dir / "data" / "manifest.md",
                exp_dir / "data" / "manifest.md")
-    if variant == "evolve":
+    if variant in OPENEVOLVE_VARIANTS:
         (exp_dir / "data" / "acp-openai-server" / "jsonl").mkdir(parents=True)
         (exp_dir / "data" / "acp-openai-server" / "process").mkdir(parents=True)
 
@@ -493,7 +494,7 @@ def _branch_experiment(args, *, root: Path, source_dir: Path) -> dict:
     #    child's `code/` (where run_experiment.py resolves paths). The
     #    --new-openevolve-database flag opts out (leaves null).
     openevolve_db_report = None
-    if variant == "evolve":
+    if variant in OPENEVOLVE_VARIANTS:
         openevolve_db_report = _inherit_openevolve_db(
             exp_dir=exp_dir,
             source_dir=source_dir,
@@ -549,7 +550,7 @@ def main() -> int:
                          "the child needs a distinct one-line description (e.g. "
                          "'exp-XXXX sibling: <delta>').")
     ap.add_argument("--new-openevolve-database", action="store_true",
-                    help="(evolve variant only) Skip inheriting the source's "
+                    help="(OpenEvolve variants only) Skip inheriting the source's "
                          "openevolve database. By default the child's "
                          "`run_config.json:openevolve.checkpoint_resume` is "
                          "set to the source's latest `checkpoint_N/` so the "

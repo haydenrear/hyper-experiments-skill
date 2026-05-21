@@ -30,6 +30,7 @@ from pathlib import Path
 
 from _lib import (
     DEFAULT_VARIANT,
+    OPENEVOLVE_VARIANTS,
     ProjectLockError,
     VALID_VARIANTS,
     acquire_project_lock,
@@ -88,6 +89,14 @@ EXTRA_CODE_FILES_BY_VARIANT = {
         "code/openevolve_db.py": "code-openevolve-db.py",
         "code/prompt-templates/diff_user.txt": "code-prompt-templates-diff_user.txt",
     },
+    "openevolve-agentic-fitness": {
+        "code/initial_program.py": "code-initial-program.py",
+        "code/evaluator.py": "code-evaluator.py",
+        "code/config.yaml": "code-config.yaml",
+        "code/openevolve_capacity.py": "code-openevolve-capacity.py",
+        "code/openevolve_db.py": "code-openevolve-db.py",
+        "code/prompt-templates/diff_user.txt": "code-prompt-templates-diff_user.txt",
+    },
 }
 
 
@@ -126,7 +135,7 @@ def _scaffold_experiment(args, *, root: Path, variant: str) -> dict:
     (exp_dir / "data").mkdir()
     for sub in DATA_SUBDIRS:
         (exp_dir / "data" / sub).mkdir()
-    if variant == "evolve":
+    if variant in OPENEVOLVE_VARIANTS:
         for sub in EVOLVE_DATA_SUBDIRS:
             (exp_dir / "data" / sub).mkdir(parents=True)
 
@@ -228,7 +237,7 @@ def _write_run_config(*, exp_dir: Path, root: Path, parent_id, child_vars, varia
 def _print_smoke_report(exp_dir: Path, rel: Path, variant: str) -> int:
     """Run the smoke test, clean up its artifacts, and report. Returns the
     process exit code to propagate (0 on success, 1 on failure)."""
-    if variant == "evolve":
+    if variant in OPENEVOLVE_VARIANTS:
         print("Smoke test: running `uv sync && OPENEVOLVE_SMOKE=1 uv run run-experiment` "
               "(no LLM calls) ...")
     else:
@@ -256,12 +265,12 @@ def _print_smoke_report(exp_dir: Path, rel: Path, variant: str) -> int:
 
 
 def _print_evolve_preflight(root: Path, rel: Path) -> None:
-    """Print the evolve-variant prerequisites: the ACP-backed
+    """Print the OpenEvolve-variant prerequisites: the ACP-backed
     OpenAI-compatible server (from the `acp-cdc-ai-python` skill) and
     this experiment's database location. New experiments get their
     own empty database; branching is what inherits a parent's.
     """
-    print("Evolve-variant prerequisites:")
+    print("OpenEvolve-variant prerequisites:")
     print("  1. ACP server (required by the default config.yaml).")
     print("     The default config.yaml points `llm.api_base` at the")
     print("     local OpenAI-compatible server provided by the")
@@ -370,14 +379,16 @@ def main() -> int:
                          "inside code/ to confirm the frozen experiment is "
                          "self-reproducible, then wipe the artifacts the smoke "
                          "produced (.venv, __pycache__, tensorboard/*, logs/*). "
-                         "For the `evolve` variant the smoke run sets "
+                         "For OpenEvolve variants the smoke run sets "
                          "OPENEVOLVE_SMOKE=1 to avoid LLM calls.")
     ap.add_argument("--variant", choices=VALID_VARIANTS, default=None,
                     help="Experiment variant. Defaults to the project's default "
                          "(read from `hyper-experiments.md`'s `Variant:` line). "
                          "`default` = PyTorch + tensorboard scaffold; "
                          "`evolve` = OpenEvolve loop scaffold (initial_program.py, "
-                         "evaluator.py, config.yaml in code/).")
+                         "evaluator.py, config.yaml in code/); "
+                         "`openevolve-agentic-fitness` = evolve scaffold with "
+                         "agentic fitness reranking enabled.")
     ap.add_argument("--lock-timeout", type=float, default=30.0,
                     help="Seconds to wait for the git-backed project lock "
                          "before failing with retry guidance (default: 30).")
@@ -453,7 +464,7 @@ def main() -> int:
     if args.smoke:
         if _print_smoke_report(exp_dir, rel, variant) != 0:
             return 1
-    if variant == "evolve":
+    if variant in OPENEVOLVE_VARIANTS:
         _print_evolve_preflight(root, rel)
     print("Next steps:")
     print(f"  1. Fill in decision policy and measurement plan in {rel}/plan.md")
