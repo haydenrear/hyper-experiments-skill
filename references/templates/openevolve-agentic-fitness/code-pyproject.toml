@@ -23,8 +23,9 @@ py-modules = ["run_experiment", "check_regressions", "openevolve_capacity", "ope
 
 [tool.uv.sources]
 python-exp = { path = "./vendored/python_exp" }
+openevolve = { git = "ssh://git@github.com/haydenrear/openevolve.git", branch = "main" }
 
-# CHAIN OF CUSTODY: the [tool.uv.sources] line above points at this
+# CHAIN OF CUSTODY: the `python-exp` source above points at this
 # experiment's own frozen copy of the shared library, populated at
 # scaffold time by `new_experiment.py` (from `tools/python_exp/`) or
 # `branch_experiment.py` (from the parent's vendored copy). Do not
@@ -34,20 +35,24 @@ python-exp = { path = "./vendored/python_exp" }
 # shared code, re-vendor (see `references/chain-of-custody.md`),
 # don't relink.
 #
+# OPENEVOLVE SOURCE: this agentic-fitness variant intentionally resolves
+# `openevolve` from the haydenrear fork because it requires the
+# agentic-fitness and ACP harness-greeting changes that are not assumed
+# to exist in the upstream/PyPI package. Pin a `rev = "<sha>"` here for
+# frozen production experiments once the fork commit is pushed.
+#
 # This experiment's code snapshot is a standalone uv project — run
 # `uv sync` inside this directory to build its isolated environment.
 # Add dependencies above. If the counterfactual delta includes a
 # dependency change (e.g. pinning a different `openevolve` version),
 # that change must be visible here.
 #
-# OPENEVOLVE: this is an `evolve` variant experiment. The driver is
+# OPENEVOLVE: this is an `openevolve-agentic-fitness` variant experiment. The driver is
 # `run_experiment.py`, which loads `config.yaml` (the openevolve
 # config), `initial_program.py` (the seed program with EVOLVE-BLOCK
 # markers), and `evaluator.py` (the evaluation function), then
 # installs `openevolve_capacity.py` (priority failover for provider
-# capacity cooldowns) and invokes openevolve. Pin a specific
-# `openevolve==<version>` once the evolutionary regime is settled —
-# the prompts and search behavior change between releases.
+# capacity cooldowns) and invokes openevolve.
 #
 # LLM API KEY: the openevolve run reads `OPENAI_API_KEY` from the
 # environment regardless of the actual provider (OpenAI, Gemini,
