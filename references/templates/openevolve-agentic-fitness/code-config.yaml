@@ -1,0 +1,128 @@
+# OpenEvolve configuration for {{experiment_id}} — {{title}}.
+#
+# This file is the source of truth for the evolutionary search itself
+# (LLM ensemble, database / island settings, prompt scaffolding,
+# evaluator timeouts). The hyper-experiments `run_config.json` lives
+# alongside this file and points at it via `openevolve.config_file`.
+#
+# Where to set things:
+#   * Counterfactual delta in `LLM/prompt/database` parameters → edit
+#     this file. Record the change in `plan.md`'s counterfactual delta
+#     and `run_config.json` will not be touched.
+#   * Anything outside openevolve (paths, baselines, project metadata)
+#     → `run_config.json` in this directory.
+#
+# Default LLM: a local OpenAI-compatible server. `api_base` below is a
+# bootstrap sentinel; `code/run_experiment.py` reads this experiment's
+# `.acp-server/server.json` and rewrites the in-process config to the
+# server's actual auto-picked port before OpenEvolve starts. The default
+# models use the ACP server's `GEMINI_` route; the suffix after `GEMINI_`
+# must match a model available in the Gemini CLI model picker.
+#
+# Auth: openevolve always reads `OPENAI_API_KEY` from the environment.
+# Local servers usually ignore the value but the SDK still requires
+# *something* be set; `code/run_experiment.py` defaults it to a sentinel
+# when unset so the local path works out of the box.
+
+max_iterations: 100
+checkpoint_interval: 10
+random_seed: 42 # full reproducibility — see openevolve README
+
+# LLM priority list. `code/openevolve_capacity.py` makes OpenEvolve try
+# models in this order. If a model returns an ACP/Google-style exhausted
+# capacity error with a reset duration, the runner records a cooldown in
+# `data/openevolve_model_capacity.json`, skips that model, and tries the
+# next entry until the cooldown expires. `weight` is kept for upstream
+# OpenEvolve compatibility; this scaffold's failover path uses list
+# order as the routing priority.
+#
+# Adjust models for the counterfactual you are testing. Keep
+# `temperature` and `timeout` consistent across siblings unless the delta
+# is specifically about them.
+llm:
+  models:
+    - name: "GEMINI_gemini-2.5-flash"
+      weight: 1.0
+  api_base: "http://localhost:8000/v1"
+  temperature: 0.7
+  max_tokens: 16000
+  timeout: 120
+
+# System message — the most important knob. See the openevolve README's
+# "Crafting Effective System Messages" section. Iterate on this prompt
+# explicitly; treat changes to it as a counterfactual delta in their
+# own right. `template_dir` overrides OpenEvolve's default diff prompt
+# so ACP-backed coding agents return only native OpenEvolve diff blocks
+# and do not use write tools.
+prompt:
+  template_dir: prompt-templates
+  system_message: |
+    You are an expert programmer working on the {{family}} family of
+    experiments. Your task is to improve the seed program for
+    {{experiment_id}} ({{title}}).
+
+    You are running inside an OpenEvolve mutation loop. You must return
+    only the diff blocks requested by the user message.
+    Do not call write, edit, patch, shell, file-creation, or other
+    project-modification tools. Do not create `main.py`, source files,
+    notes, scripts, or artifacts. Do not include prose, markdown fences,
+    plans, explanations, or full rewritten files in your response.
+
+    TODO: replace this placeholder with the experiment-specific
+    guidance. Include:
+      - what is being optimized (objective in plain language),
+      - constraints (what must NOT change — function signatures, I/O
+        contract, external API),
+      - the kinds of optimization that count as progress.
+
+# MAP-Elites database. Population / islands shape exploration breadth.
+database:
+  population_size: 50
+  archive_size: 20
+  num_islands: 3
+  elite_selection_ratio: 0.2
+  exploitation_ratio: 0.7
+  similarity_threshold: 0.99
+
+# Evaluator settings. `cascade_thresholds` is the score(s) a candidate
+# must clear at each stage to graduate to the next.
+evaluator:
+  timeout: 60
+  cascade_thresholds: [0.5]
+  parallel_evaluations: 1
+  enable_artifacts: true
+
+# Agentic fitness research reranking. The mutation LLM still uses the
+# normal OpenAI-compatible chat path above. At each research interval,
+# OpenEvolve creates a fresh ACP harness session for the fitness
+# researcher, gives it this experiment root as cwd, and applies the
+# returned cross-island rank-percentile score epoch to retained
+# programs.
+fitness:
+  algo: agentic
+  agentic:
+    enabled: true
+    mode: hybrid
+    model: "GEMINI_gemini-2.5-flash"
+    temperature: 0.0
+    research_rerank_interval: 10
+    research_rerank_min_pending: 2
+    research_scope: all_retained
+    research_top_k_per_island: 6
+    research_include_archive: true
+    research_include_cell_incumbents: true
+    research_include_pending_children: true
+    research_max_programs: 24
+    normalization_method: rank_percentile
+    rewrite_combined_score: true
+    rebuild_map_elites_after_research: true
+    dump_research_events: true
+    research_events_path: "../logs/fitness_events"
+    acp-cdc-ai-python: true
+    acp_cdc_ai_python_base_url: "http://localhost:8000/v1"
+    acp_cdc_ai_python_cwd: null
+
+# Evolution mode: diff_based_evolution=true means the LLM emits diffs
+# (cheaper, smaller mutations); false = full rewrites.
+diff_based_evolution: true
+max_code_length: 20000

@@ -19,8 +19,9 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "references" / "templat
 ROOT_MARKER = "hyper-experiments.md"
 EXP_ID_RE = re.compile(r"^exp-(\d{4})")
 
-VALID_VARIANTS = ("default", "evolve")
+VALID_VARIANTS = ("default", "evolve", "openevolve-agentic-fitness")
 DEFAULT_VARIANT = "default"
+OPENEVOLVE_VARIANTS = ("evolve", "openevolve-agentic-fitness")
 
 # OpenEvolve writes its MAP-Elites database into per-experiment
 # `<exp>/logs/openevolve_output/`, with snapshots saved as
@@ -949,7 +950,7 @@ def run_smoke_test_and_cleanup(exp_dir: Path, variant: str = DEFAULT_VARIANT) ->
 
     import os as _os
     run_env = _os.environ.copy()
-    if variant == "evolve":
+    if variant in OPENEVOLVE_VARIANTS:
         run_env["OPENEVOLVE_SMOKE"] = "1"
     run = subprocess.run(
         [uv, "run", "run-experiment"], cwd=str(code_dir),

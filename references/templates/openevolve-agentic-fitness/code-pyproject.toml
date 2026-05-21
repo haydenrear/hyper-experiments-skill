@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "{{experiment_id}}-{{slug}}"
+version = "0.1.0"
+description = "{{title}}"
+requires-python = ">=3.10"
+dependencies = [
+  "python-exp",
+  "openevolve",
+  "pyyaml>=6.0",
+]
+
+[project.scripts]
+run-experiment = "run_experiment:main"
+check-regressions = "check_regressions:main"
+openevolve-db = "openevolve_db:main"
+
+[tool.setuptools]
+py-modules = ["run_experiment", "check_regressions", "openevolve_capacity", "openevolve_db"]
+
+[tool.uv.sources]
+python-exp = { path = "./vendored/python_exp" }
+
+# CHAIN OF CUSTODY: the [tool.uv.sources] line above points at this
+# experiment's own frozen copy of the shared library, populated at
+# scaffold time by `new_experiment.py` (from `tools/python_exp/`) or
+# `branch_experiment.py` (from the parent's vendored copy). Do not
+# repoint it at `tools/python_exp/` or add `editable = true` — that
+# would silently break reproducibility by letting future edits to the
+# shared library mutate this experiment's behavior. To pick up newer
+# shared code, re-vendor (see `references/chain-of-custody.md`),
+# don't relink.
+#
+# This experiment's code snapshot is a standalone uv project — run
+# `uv sync` inside this directory to build its isolated environment.
+# Add dependencies above. If the counterfactual delta includes a
+# dependency change (e.g. pinning a different `openevolve` version),
+# that change must be visible here.
+#
+# OPENEVOLVE: this is an `evolve` variant experiment. The driver is
+# `run_experiment.py`, which loads `config.yaml` (the openevolve
+# config), `initial_program.py` (the seed program with EVOLVE-BLOCK
+# markers), and `evaluator.py` (the evaluation function), then
+# installs `openevolve_capacity.py` (priority failover for provider
+# capacity cooldowns) and invokes openevolve. Pin a specific
+# `openevolve==<version>` once the evolutionary regime is settled —
+# the prompts and search behavior change between releases.
+#
+# LLM API KEY: the openevolve run reads `OPENAI_API_KEY` from the
+# environment regardless of the actual provider (OpenAI, Gemini,
+# local Ollama, etc.). See `config.yaml` for the api_base setting
+# that selects the provider.

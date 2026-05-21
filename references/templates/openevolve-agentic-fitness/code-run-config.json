@@ -1,0 +1,31 @@
+{
+  "experiment_id": "{{experiment_id}}",
+  "slug": "{{slug}}",
+  "family": "{{family}}",
+  "variant": "openevolve-agentic-fitness",
+  "run_name": "{{experiment_id}}-{{slug}}",
+  "parent_experiment": "{{parent_experiment}}",
+  "parent_checkpoint": "{{parent_checkpoint}}",
+  "paths": {
+    "tensorboard": "../tensorboard",
+    "checkpoints": "../checkpoints",
+    "logs": "../logs",
+    "data": "../data",
+    "openevolve_output": "../logs/openevolve_output"
+  },
+  "openevolve": {
+    "config_file": "config.yaml",
+    "initial_program": "initial_program.py",
+    "evaluator": "evaluator.py",
+    "iterations": null,
+    "target_score": null,
+    "checkpoint_resume": null
+  },
+  "logging": {
+    "wandb": {
+      "run_name": "{{experiment_id}}-{{slug}}",
+      "tags": ["{{family}}", "openevolve-agentic-fitness"]
+    }
+  },
+  "hyperparameters": {}
+}
