@@ -263,7 +263,7 @@ def main(ctx):
         result = (
             (NodeResult.pass_("openevolve.gemini.short_run") if accepted else NodeResult.fail(
                 "openevolve.gemini.short_run",
-                f"expected success or quota exhaustion, got exit={exit_code} timeout={timed_out}",
+                f"expected success or quota exhaustion, got exit={exit_code} timeout={timed_out} {success} {run_text}",
             ))
             .assertion("acp_server_ready", True)
             .assertion("outcome_success_or_quota", accepted)
