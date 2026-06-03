@@ -20,7 +20,7 @@
 #
 # After editing, run a smoke check before launch:
 #
-#     OPENEVOLVE_SMOKE=1 uv run run-experiment
+#     OPENEVOLVE_SMOKE=1 uv run run-openevolve
 
 from __future__ import annotations
 

@@ -10,12 +10,12 @@ configuration lives in `config.yaml`.
 Run from the hyper-experiments project root:
 
     uv sync --project experiments/families/{{family}}/{{experiment_id}}-{{slug}}/code
-    uv run --project experiments/families/{{family}}/{{experiment_id}}-{{slug}}/code run-experiment
+    uv run --project experiments/families/{{family}}/{{experiment_id}}-{{slug}}/code run-openevolve
 
 Or from inside this code directory:
 
     uv sync
-    uv run run-experiment
+    uv run run-openevolve
 
 Required environment:
 
@@ -30,27 +30,17 @@ Required environment:
                         # of the box. Override with a real key when
                         # `api_base` points at a paid provider.
 
-Required service (only when api_base is local):
+Local ACP service:
 
     The default `config.yaml` points at the ACP-backed
     OpenAI-compatible HTTP server provided by the
     `acp-cdc-ai-python` skill (a transitive skill_reference of
-    hyper-experiments). Start one server for this experiment before
-    launching this experiment:
-
-        mkdir -p <experiment-dir>/data/acp-openai-server/process
-        "$SKILL_MANAGER_HOME/skills/acp-cdc-ai-python/scripts/start-server.py" \
-            --project-root <experiment-dir> \
-            --host 127.0.0.1 \
-            --log-dir data/acp-openai-server/jsonl \
-            > <experiment-dir>/data/acp-openai-server/process/stdout.log \
-            2> <experiment-dir>/data/acp-openai-server/process/stderr.log &
-
-    The launcher writes `<experiment-dir>/.acp-server/server.json`
-    with `host`, `port`, and `pid`. This script probes that file
-    before importing openevolve, points the local `api_base` at the
-    recorded host/port, and exits non-zero with a hint when the file is
-    missing or the recorded pid is dead.
+    hyper-experiments). When `config.yaml` points at localhost, this
+    script starts one experiment-local ACP server, waits for it to
+    become ready, overrides the loaded OpenEvolve config object with
+    the auto-picked port, sends ACP JSONL traces to
+    `data/acp-openai-server/jsonl/`, and stops the server when the
+    OpenEvolve run exits.
 
 `run_baselines()` runs before the evolutionary search and is a no-op by
 default — see `run_experiment.py` (default variant) and SKILL.md for the
@@ -69,7 +59,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
+import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -95,6 +88,7 @@ LOCAL_API_BASE_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0")
 # hard-coding port 8000 everywhere.
 ACP_SERVER_INFO_FILENAME = ".acp-server/server.json"
 EXPERIMENT_ROOT_MARKER = "index.md"
+ACP_SERVER_READY_TIMEOUT_SECONDS = 180
 
 
 def load_run_config() -> dict:
@@ -152,68 +146,142 @@ def _api_base_is_local(api_base: str | None) -> bool:
     return any(host in api_base for host in LOCAL_API_BASE_HOSTS)
 
 
-def _check_acp_server(api_base: str | None) -> dict | None:
-    """When `api_base` is local, verify the ACP-backed server is up.
+def _acp_skill_home() -> Path:
+    raw = os.environ.get("ACP_CDC_AI_PYTHON_SKILL_HOME")
+    if raw:
+        return Path(raw).expanduser().resolve()
+    sm_home = Path(os.environ.get("SKILL_MANAGER_HOME", str(Path.home() / ".skill-manager")))
+    return sm_home / "skills" / "acp-cdc-ai-python"
 
-    Reads `<experiment-root>/.acp-server/server.json` (written by the
-    `acp-cdc-ai-python` skill's launcher) and probes the recorded pid
-    with signal-0. Returns the decoded server-info dict if the server
-    looks live, `None` if the `api_base` is remote (nothing to check),
-    and exits via `SystemExit` with a helpful error otherwise.
-    """
-    if not _api_base_is_local(api_base):
-        return None
-    experiment_root = _find_experiment_root(CODE_DIR)
-    if experiment_root is None:
-        print("warning: could not locate this experiment's root from "
-              f"{CODE_DIR}; skipping ACP-server preflight.",
-              file=sys.stderr)
-        return None
+
+def _read_acp_server_info(experiment_root: Path) -> dict | None:
     info_path = experiment_root / ACP_SERVER_INFO_FILENAME
     if not info_path.exists():
-        print(
-            f"error: api_base={api_base!r} expects the local ACP-backed "
-            "OpenAI-compatible server to be running, but "
-            f"{info_path} is missing.\n"
-            "       Start one server for this experiment with the "
-            "`acp-cdc-ai-python` skill's launcher:\n"
-            f"           mkdir -p {experiment_root}/data/acp-openai-server/process\n"
-            "           \"$SKILL_MANAGER_HOME/skills/acp-cdc-ai-python/"
-            "scripts/start-server.py\" \\\n"
-            f"               --project-root {experiment_root} \\\n"
-            "               --host 127.0.0.1 \\\n"
-            "               --log-dir data/acp-openai-server/jsonl \\\n"
-            f"               > {experiment_root}/data/acp-openai-server/process/stdout.log \\\n"
-            f"               2> {experiment_root}/data/acp-openai-server/process/stderr.log &\n"
-            "       See SKILL.md > 'Prerequisite: the ACP-backed "
-            "OpenAI-compatible server' for the full rationale.",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
+        return None
     try:
-        info = json.loads(info_path.read_text())
-        pid = int(info["pid"])
-        host = str(info["host"])
-        port = int(info["port"])
-    except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
-        print(f"error: {info_path} exists but is unparseable ({e}). "
-              "Stop the launcher and start it again.", file=sys.stderr)
-        raise SystemExit(1)
+        return json.loads(info_path.read_text())
+    except json.JSONDecodeError:
+        return None
+
+
+def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
+        return True
     except ProcessLookupError:
-        print(f"error: ACP-server marker at {info_path} points at "
-              f"pid={pid}, which is no longer running. Restart the "
-              "server with the launcher (see SKILL.md).", file=sys.stderr)
-        raise SystemExit(1)
+        return False
     except PermissionError:
-        # The process exists but is owned by another user — treat as
-        # live (we couldn't have spawned it, but signal-0 still proves
-        # presence).
-        pass
-    print(f"openevolve: ACP server preflight OK "
-          f"(host={host!r} port={port!r} pid={pid}).")
-    return {"host": host, "port": port, "pid": pid, "info_path": str(info_path)}
+        return True
+
+
+def _wait_for_acp_server(experiment_root: Path, proc: subprocess.Popen) -> dict:
+    deadline = time.time() + ACP_SERVER_READY_TIMEOUT_SECONDS
+    last_info: dict | None = None
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(f"ACP server exited early with code {proc.returncode}")
+        info = _read_acp_server_info(experiment_root)
+        if info:
+            last_info = info
+            try:
+                pid = int(info["pid"])
+                host = str(info["host"])
+                port = int(info["port"])
+            except (KeyError, TypeError, ValueError):
+                time.sleep(1)
+                continue
+            if not _pid_alive(pid):
+                time.sleep(1)
+                continue
+            url = f"http://{host}:{port}/v1/models"
+            try:
+                with urllib.request.urlopen(url, timeout=3) as resp:
+                    if 200 <= resp.status < 500:
+                        return {"host": host, "port": port, "pid": pid}
+            except (OSError, urllib.error.URLError):
+                time.sleep(1)
+                continue
+        time.sleep(1)
+    raise RuntimeError(f"ACP server did not become ready; last server info={last_info!r}")
+
+
+def _start_acp_server(run_config: dict) -> tuple[subprocess.Popen, dict]:
+    experiment_root = _find_experiment_root(CODE_DIR)
+    if experiment_root is None:
+        raise RuntimeError(f"could not locate this experiment's root from {CODE_DIR}")
+    start_server = _acp_skill_home() / "scripts" / "start-server.py"
+    if not start_server.exists():
+        raise RuntimeError(
+            f"missing acp-cdc-ai-python launcher at {start_server}; "
+            "install the acp-cdc-ai-python skill or set ACP_CDC_AI_PYTHON_SKILL_HOME"
+        )
+
+    data_dir = _resolve(run_config["paths"]["data"])
+    jsonl_dir = data_dir / "acp-openai-server" / "jsonl"
+    process_dir = data_dir / "acp-openai-server" / "process"
+    jsonl_dir.mkdir(parents=True, exist_ok=True)
+    process_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = process_dir / "stdout.log"
+    stderr_path = process_dir / "stderr.log"
+
+    print(f"openevolve: starting ACP server with JSONL log dir={jsonl_dir}")
+    with stdout_path.open("ab") as out, stderr_path.open("ab") as err:
+        proc = subprocess.Popen(
+            [
+                str(start_server),
+                "--project-root",
+                str(experiment_root),
+                "--host",
+                "127.0.0.1",
+                "--log-dir",
+                str(jsonl_dir),
+            ],
+            cwd=experiment_root,
+            stdout=out,
+            stderr=err,
+            env=os.environ.copy(),
+        )
+    try:
+        info = _wait_for_acp_server(experiment_root, proc)
+    except RuntimeError as e:
+        _stop_acp_server(proc, None)
+        raise RuntimeError(
+            f"{e}. See {stdout_path} and {stderr_path} for launcher output."
+        ) from e
+    print(
+        f"openevolve: ACP server ready "
+        f"(host={info['host']!r} port={info['port']!r} pid={info['pid']})."
+    )
+    return proc, {
+        **info,
+        "info_path": str(experiment_root / ACP_SERVER_INFO_FILENAME),
+        "jsonl_dir": str(jsonl_dir),
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+    }
+
+
+def _stop_acp_server(proc: subprocess.Popen | None, server_info: dict | None) -> None:
+    if proc is None:
+        return
+    try:
+        pid = int(server_info["pid"]) if server_info else proc.pid
+    except (KeyError, TypeError, ValueError):
+        pid = proc.pid
+    if proc.poll() is None:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            proc.wait(timeout=10)
+    print(f"openevolve: stopped ACP server pid={pid}")
 
 
 def _bind_local_api_base_to_acp_server(cfg, server_info: dict | None) -> str | None:
@@ -336,47 +404,53 @@ async def _run_evolution(run_config: dict) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     cfg = load_config(str(config_path))
-    api_base = getattr(cfg.llm, "api_base", None)
-    server_info = _check_acp_server(api_base)
-    api_base = _bind_local_api_base_to_acp_server(cfg, server_info)
-    _validate_configured_models(api_base, cfg)
-    _ensure_api_key_for_local(api_base)
-    iterations = oe_cfg.get("iterations") or cfg.max_iterations
-    target_score = oe_cfg.get("target_score")
-    checkpoint = oe_cfg.get("checkpoint_resume")
+    server_proc = None
+    server_info = None
+    try:
+        api_base = getattr(cfg.llm, "api_base", None)
+        if _api_base_is_local(api_base):
+            server_proc, server_info = _start_acp_server(run_config)
+        api_base = _bind_local_api_base_to_acp_server(cfg, server_info)
+        _validate_configured_models(api_base, cfg)
+        _ensure_api_key_for_local(api_base)
+        iterations = oe_cfg.get("iterations") or cfg.max_iterations
+        target_score = oe_cfg.get("target_score")
+        checkpoint = oe_cfg.get("checkpoint_resume")
 
-    print(f"openevolve: initial_program={initial_path}")
-    print(f"openevolve: evaluator={evaluator_path}")
-    print(f"openevolve: config={config_path}")
-    print(f"openevolve: output_dir={output_dir}")
-    print(f"openevolve: iterations={iterations} target_score={target_score}")
+        print(f"openevolve: initial_program={initial_path}")
+        print(f"openevolve: evaluator={evaluator_path}")
+        print(f"openevolve: config={config_path}")
+        print(f"openevolve: output_dir={output_dir}")
+        print(f"openevolve: iterations={iterations} target_score={target_score}")
 
-    oe = OpenEvolve(
-        initial_program_path=str(initial_path),
-        evaluation_file=str(evaluator_path),
-        config=cfg,
-        output_dir=str(output_dir),
-    )
-    if checkpoint:
-        ckpt = _resolve(checkpoint)
-        if not ckpt.exists():
-            print(f"error: checkpoint {ckpt} not found", file=sys.stderr)
-            return 1
-        print(f"openevolve: resuming from {ckpt}")
-        oe.database.load(str(ckpt))
+        oe = OpenEvolve(
+            initial_program_path=str(initial_path),
+            evaluation_file=str(evaluator_path),
+            config=cfg,
+            output_dir=str(output_dir),
+        )
+        if checkpoint:
+            ckpt = _resolve(checkpoint)
+            if not ckpt.exists():
+                print(f"error: checkpoint {ckpt} not found", file=sys.stderr)
+                return 1
+            print(f"openevolve: resuming from {ckpt}")
+            oe.database.load(str(ckpt))
 
-    best = await oe.run(
-        iterations=iterations,
-        target_score=target_score,
-        checkpoint_path=str(_resolve(checkpoint)) if checkpoint else None,
-    )
+        best = await oe.run(
+            iterations=iterations,
+            target_score=target_score,
+            checkpoint_path=str(_resolve(checkpoint)) if checkpoint else None,
+        )
 
-    print()
-    print("openevolve: evolution complete.")
-    print("best metrics:")
-    for k, v in best.metrics.items():
-        print(f"  {k}: {v}")
-    return 0
+        print()
+        print("openevolve: evolution complete.")
+        print("best metrics:")
+        for k, v in best.metrics.items():
+            print(f"  {k}: {v}")
+        return 0
+    finally:
+        _stop_acp_server(server_proc, server_info)
 
 
 def main() -> int:

@@ -70,7 +70,7 @@ def main(ctx):
         "--invariant",
         "generated scaffold only",
         "--command",
-        "uv run run-experiment",
+        "uv run run-openevolve",
         "--variant",
         "evolve",
         "--type",
@@ -107,6 +107,25 @@ def main(ctx):
     code_dir = exp_dir / "code"
     model_priority = _model_priority()
 
+    (code_dir / "initial_program.py").write_text(
+        """from __future__ import annotations
+
+
+# EVOLVE-BLOCK-START
+def solve() -> float:
+    return 1.0
+# EVOLVE-BLOCK-END
+
+
+def run() -> dict:
+    return {"score": float(solve())}
+
+
+if __name__ == "__main__":
+    print(run())
+"""
+    )
+
     run_config_path = code_dir / "run_config.json"
     run_config = json.loads(run_config_path.read_text())
     run_config["openevolve"]["iterations"] = int(os.environ.get("TEST_GRAPH_OPENEVOLVE_ITERATIONS", "1"))
@@ -131,6 +150,7 @@ def main(ctx):
         .assertion("new_experiment_exit_zero", True)
         .assertion("experiment_dir_exists", exp_dir.is_dir())
         .assertion("capacity_helper_exists", (code_dir / "openevolve_capacity.py").exists())
+        .assertion("best_program_runner_exists", (code_dir / "run_best_program.py").exists())
         .assertion("diff_prompt_exists", (code_dir / "prompt-templates" / "diff_user.txt").exists())
         .artifact("new-experiment-log", str(log_path))
         .artifact("run-config", str(run_config_path))

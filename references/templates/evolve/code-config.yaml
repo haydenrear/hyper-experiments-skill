@@ -13,9 +13,10 @@
 #     → `run_config.json` in this directory.
 #
 # Default LLM: a local OpenAI-compatible server. `api_base` below is a
-# bootstrap sentinel; `code/run_experiment.py` reads this experiment's
-# `.acp-server/server.json` and rewrites the in-process config to the
-# server's actual auto-picked port before OpenEvolve starts. The default
+# bootstrap sentinel; `code/run_experiment.py` starts this experiment's
+# ACP server and overrides the loaded config object to the server's
+# actual auto-picked port before OpenEvolve starts. This file remains a
+# stable sentinel unless you intentionally change providers. The default
 # models use the ACP server's `GEMINI_` route; the suffix after `GEMINI_`
 # must match a model available in the Gemini CLI model picker.
 #

@@ -85,6 +85,7 @@ EXTRA_CODE_FILES_BY_VARIANT = {
         "code/initial_program.py": "code-initial-program.py",
         "code/evaluator.py": "code-evaluator.py",
         "code/config.yaml": "code-config.yaml",
+        "code/run_best_program.py": "code-run-best-program.py",
         "code/openevolve_capacity.py": "code-openevolve-capacity.py",
         "code/openevolve_db.py": "code-openevolve-db.py",
         "code/prompt-templates/diff_user.txt": "code-prompt-templates-diff_user.txt",
@@ -93,6 +94,7 @@ EXTRA_CODE_FILES_BY_VARIANT = {
         "code/initial_program.py": "code-initial-program.py",
         "code/evaluator.py": "code-evaluator.py",
         "code/config.yaml": "code-config.yaml",
+        "code/run_best_program.py": "code-run-best-program.py",
         "code/openevolve_capacity.py": "code-openevolve-capacity.py",
         "code/openevolve_db.py": "code-openevolve-db.py",
         "code/prompt-templates/diff_user.txt": "code-prompt-templates-diff_user.txt",
@@ -238,7 +240,7 @@ def _print_smoke_report(exp_dir: Path, rel: Path, variant: str) -> int:
     """Run the smoke test, clean up its artifacts, and report. Returns the
     process exit code to propagate (0 on success, 1 on failure)."""
     if variant in OPENEVOLVE_VARIANTS:
-        print("Smoke test: running `uv sync && OPENEVOLVE_SMOKE=1 uv run run-experiment` "
+        print("Smoke test: running `uv sync && OPENEVOLVE_SMOKE=1 uv run run-openevolve` "
               "(no LLM calls) ...")
     else:
         print("Smoke test: running `uv sync && uv run run-experiment` ...")
@@ -271,29 +273,11 @@ def _print_evolve_preflight(root: Path, rel: Path) -> None:
     own empty database; branching is what inherits a parent's.
     """
     print("OpenEvolve-variant prerequisites:")
-    print("  1. ACP server (required by the default config.yaml).")
-    print("     The default config.yaml points `llm.api_base` at the")
-    print("     local OpenAI-compatible server provided by the")
-    print("     `acp-cdc-ai-python` skill (a skill_reference of")
-    print("     hyper-experiments). Start a fresh server for this")
-    print("     experiment before launching it. The launcher root and")
-    print("     logs should be inside this experiment:")
-    print()
-    exp_dir = root / rel
-    process_dir = exp_dir / "data/acp-openai-server/process"
-    print(f'       mkdir -p "{process_dir}"')
-    print('       "$SKILL_MANAGER_HOME/skills/acp-cdc-ai-python/scripts/start-server.py" \\')
-    print(f'           --project-root "{exp_dir}" \\')
-    print("           --host 127.0.0.1 \\")
-    print("           --log-dir data/acp-openai-server/jsonl \\")
-    print(f'           > "{process_dir}/stdout.log" \\')
-    print(f'           2> "{process_dir}/stderr.log" &')
-    print()
-    print("     The launcher drops this experiment's")
-    print("     `.acp-server/server.json`; `code/run_experiment.py`")
-    print("     probes that file, points OpenEvolve at the recorded")
-    print("     host/port, and refuses to start if the server is")
-    print("     missing or stale.")
+    print("  1. ACP server (automatic for the default config.yaml).")
+    print("     `uv run run-openevolve` starts a fresh ACP server for")
+    print("     this experiment, waits for `/v1/models`, overrides")
+    print("     the loaded OpenEvolve config to the auto-picked port,")
+    print("     and stops the server when the run exits.")
     print("     JSONL traces:      data/acp-openai-server/jsonl/")
     print("     server stdout/err: data/acp-openai-server/process/")
     print("     Mutation prompt:   code/prompt-templates/diff_user.txt")
@@ -310,6 +294,8 @@ def _print_evolve_preflight(root: Path, rel: Path) -> None:
     print("     checkpoint_resume: null (fresh database; the seed program")
     print("                        is scored as iteration 0 by openevolve).")
     print("     Inspect with:      `uv run openevolve-db status` from")
+    print(f"                        inside {rel}/code/.")
+    print("     Run best program:  `uv run run-best-program` from")
     print(f"                        inside {rel}/code/.")
     print("     Do NOT point `paths.openevolve_output` at another")
     print("     experiment's directory — concurrent writes corrupt both.")
@@ -375,7 +361,7 @@ def main() -> int:
     ap.add_argument("--command", default="",
                     help="Exact launch command.")
     ap.add_argument("--smoke", action="store_true",
-                    help="After scaffolding, run `uv sync && uv run run-experiment` "
+                    help="After scaffolding, run `uv sync && uv run <entry>` "
                          "inside code/ to confirm the frozen experiment is "
                          "self-reproducible, then wipe the artifacts the smoke "
                          "produced (.venv, __pycache__, tensorboard/*, logs/*). "

@@ -881,7 +881,7 @@ def inherit_run_config(template_obj, parent_config, child_vars):
     return merged, changes
 
 
-# Smoke-test artifact cleanup. Running `uv sync && uv run run-experiment`
+# Smoke-test artifact cleanup. Running `uv sync && uv run <entry>`
 # leaves four kinds of bytes behind that must not enter the freeze commit:
 #
 #   - <exp>/code/.venv             (per-experiment virtualenv)
@@ -911,10 +911,10 @@ def _wipe_dir_contents(d: Path) -> list:
 
 
 def run_smoke_test_and_cleanup(exp_dir: Path, variant: str = DEFAULT_VARIANT) -> dict:
-    """Run `uv sync && uv run run-experiment` inside `<exp>/code/`, then
+    """Run `uv sync && uv run <entry>` inside `<exp>/code/`, then
     delete the artifacts the smoke run produced.
 
-    For the `evolve` variant, the run-experiment invocation is wrapped
+    For OpenEvolve variants, the run-openevolve invocation is wrapped
     with `OPENEVOLVE_SMOKE=1` so it short-circuits before any LLM call —
     the smoke goal is "scaffold reproduces and entry points import",
     not "burn API credits."
@@ -952,8 +952,9 @@ def run_smoke_test_and_cleanup(exp_dir: Path, variant: str = DEFAULT_VARIANT) ->
     run_env = _os.environ.copy()
     if variant in OPENEVOLVE_VARIANTS:
         run_env["OPENEVOLVE_SMOKE"] = "1"
+    entry = "run-openevolve" if variant in OPENEVOLVE_VARIANTS else "run-experiment"
     run = subprocess.run(
-        [uv, "run", "run-experiment"], cwd=str(code_dir),
+        [uv, "run", entry], cwd=str(code_dir),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         env=run_env,
     )

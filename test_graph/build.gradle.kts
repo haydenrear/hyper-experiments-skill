@@ -10,5 +10,6 @@ validationGraph {
         node("sources/openevolve_experiment_scaffolded.py")
         node("sources/openevolve_gemini_short_run.py")
             .timeout("45m")
+        node("sources/openevolve_best_program_runs.py")
     }
 }

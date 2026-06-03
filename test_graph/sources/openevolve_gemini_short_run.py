@@ -170,40 +170,8 @@ def main(ctx):
     server_stderr = process_dir / "stderr.log"
     run_log = ctx.report_dir / "openevolve_gemini_short_run.log"
 
-    server_proc: subprocess.Popen | None = None
     server_pid: int | None = None
     try:
-        with server_stdout.open("ab") as out, server_stderr.open("ab") as err:
-            server_proc = subprocess.Popen(
-                [
-                    str(start_server),
-                    "--project-root",
-                    str(exp_dir),
-                    "--host",
-                    "127.0.0.1",
-                    "--log-dir",
-                    "data/acp-openai-server/jsonl",
-                ],
-                cwd=exp_dir,
-                stdout=out,
-                stderr=err,
-                env=os.environ.copy(),
-            )
-
-        info = _wait_for_server(exp_dir)
-        if info:
-            try:
-                server_pid = int(info["pid"])
-            except (KeyError, TypeError, ValueError):
-                server_pid = server_proc.pid
-        if not info or not server_pid or not _pid_alive(server_pid):
-            return (
-                NodeResult.fail("openevolve.gemini.short_run", "ACP server did not become ready")
-                .assertion("acp_server_ready", False)
-                .artifact("server-stdout", str(server_stdout))
-                .artifact("server-stderr", str(server_stderr))
-            )
-
         timeout_s = int(os.environ.get("TEST_GRAPH_OPENEVOLVE_RUN_TIMEOUT", "600"))
         run_env = {
             **os.environ,
@@ -217,7 +185,7 @@ def main(ctx):
         started = time.time()
         with run_log.open("wb") as log:
             proc = subprocess.Popen(
-                ["uv", "run", "run-experiment"],
+                ["uv", "run", "run-openevolve"],
                 cwd=code_dir,
                 stdout=log,
                 stderr=subprocess.STDOUT,
@@ -236,6 +204,7 @@ def main(ctx):
 
         elapsed = time.time() - started
         run_text = run_log.read_text(errors="replace") if run_log.exists() else ""
+        acp_server_ready = "openevolve: ACP server ready" in run_text
         events = _capacity_events(exp_dir)
         state = _capacity_state(exp_dir)
         capacity_events = [e for e in events if e.get("event") == "capacity_exhausted"]
@@ -253,11 +222,12 @@ def main(ctx):
         success = (
             exit_code == 0
             and "openevolve: evolution complete." in run_text
+            and acp_server_ready
             and not llm_generation_failed
             and not capacity_in_run_log
         )
         quota_path = bool(capacity_events and (resume_times or state_resume_times))
-        accepted = success or quota_path
+        accepted = acp_server_ready and (success or quota_path)
         outcome = "success" if success else "quota_exhausted" if quota_path else "unexpected_failure"
 
         result = (
@@ -265,7 +235,7 @@ def main(ctx):
                 "openevolve.gemini.short_run",
                 f"expected success or quota exhaustion, got exit={exit_code} timeout={timed_out} {success} {run_text}",
             ))
-            .assertion("acp_server_ready", True)
+            .assertion("acp_server_ready", acp_server_ready)
             .assertion("outcome_success_or_quota", accepted)
             .assertion("success_has_completed_marker", (not success) or "openevolve: evolution complete." in run_text)
             .assertion("success_has_no_llm_failure", (not success) or not llm_generation_failed)
@@ -291,7 +261,7 @@ def main(ctx):
                 server_pid = int(info["pid"])
             except (KeyError, TypeError, ValueError):
                 server_pid = None
-        _terminate(server_pid or (server_proc.pid if server_proc else None))
+        _terminate(server_pid)
 
 
 if __name__ == "__main__":

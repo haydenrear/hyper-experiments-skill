@@ -15,9 +15,14 @@ openevolve loop, poll it, evaluate it, propose children with a different
 config / prompt / seed).
 
 ## Preferred tools and scripts
-- `uv run run-experiment` — launches the openevolve loop using
+- `uv run run-openevolve` — launches the openevolve loop using
   `code/config.yaml`, `code/initial_program.py`, and `code/evaluator.py`.
-- `OPENEVOLVE_SMOKE=1 uv run run-experiment` — validates scaffolding
+  If the config points at localhost, this starts and stops the
+  experiment-local ACP server automatically.
+- `uv run run-best-program` — runs the current deployable best program
+  from `logs/openevolve_output/best/best_program.py` without launching
+  OpenEvolve. Use this for deployment.
+- `OPENEVOLVE_SMOKE=1 uv run run-openevolve` — validates scaffolding
   without making any LLM calls. Use this before launch and after every
   config edit.
 - `uv run check-regressions` — verifies the openevolve API and the
@@ -45,26 +50,14 @@ config / prompt / seed).
 
 ## Preflight before launch
 
-1. **Experiment-local ACP server must be running.** The default `config.yaml` points
-   `llm.api_base` at `http://localhost:8000/v1`, which is the
+1. **Experiment-local ACP server lifecycle.** The default `config.yaml` points
+   `llm.api_base` at a localhost OpenAI-compatible endpoint, which is the
    OpenAI-compatible HTTP server provided by the
    **`acp-cdc-ai-python`** skill (a transitive skill_reference of
-   hyper-experiments). Start one server for this experiment with the
-   skill's launcher — never hand-launch the inner Python entry point:
-   ```bash
-   # Run from this experiment's root directory.
-   mkdir -p data/acp-openai-server/process
-   "$SKILL_MANAGER_HOME/skills/acp-cdc-ai-python/scripts/start-server.py" \
-       --project-root . \
-       --host 127.0.0.1 \
-       --log-dir data/acp-openai-server/jsonl \
-       > data/acp-openai-server/process/stdout.log \
-       2> data/acp-openai-server/process/stderr.log &
-   ```
-   The launcher writes this experiment's `.acp-server/server.json`;
-   `run_experiment.py` probes that file, points the local OpenEvolve
-   config at the recorded host/port, and refuses to launch the
-   evolutionary loop if the server is missing or its pid is dead. ACP
+   hyper-experiments). `uv run run-openevolve` starts one server for
+   this experiment, waits for `/v1/models`, overrides the loaded
+   OpenEvolve config to the auto-picked port, and stops the server
+   when the run exits. ACP
    conversation JSONL traces belong in `data/acp-openai-server/jsonl/`;
    server stdout/stderr belong in `data/acp-openai-server/process/`.
    See SKILL.md > "Prerequisite: the ACP-backed OpenAI-compatible

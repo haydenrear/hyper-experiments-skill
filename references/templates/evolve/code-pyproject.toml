@@ -14,12 +14,14 @@ dependencies = [
 ]
 
 [project.scripts]
+run-openevolve = "run_experiment:main"
+run-best-program = "run_best_program:main"
 run-experiment = "run_experiment:main"
 check-regressions = "check_regressions:main"
 openevolve-db = "openevolve_db:main"
 
 [tool.setuptools]
-py-modules = ["run_experiment", "check_regressions", "openevolve_capacity", "openevolve_db"]
+py-modules = ["run_experiment", "run_best_program", "check_regressions", "openevolve_capacity", "openevolve_db"]
 
 [tool.uv.sources]
 python-exp = { path = "./vendored/python_exp" }
