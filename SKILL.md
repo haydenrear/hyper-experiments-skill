@@ -1846,6 +1846,39 @@ When asked to run, poll, or re-run an experiment, the LLM must:
 
 ---
 
+## Generated observability contract
+
+Every newly scaffolded default, evolve, and
+`openevolve-agentic-fitness` experiment is observable without user
+instrumentation:
+
+- the generated environment installs
+  `tracing-skill-observability` from immutable tracing-skill commit
+  `618d33169d9aa3e168c60ab9100fb7efb24a13e6`;
+- `python_exp.observability` configures structured logging, tracing, and
+  native OpenTelemetry metrics together; native generated processes use
+  direct `otlp-only` log delivery by default;
+- bootstrap, iteration, evaluation, and subprocess handoff events use
+  short spans rather than wrapping a training or evolution loop;
+- `TRACEPARENT` and `TRACESTATE` carry the W3C context into generated
+  subprocesses;
+- one stable agent-visible handle is persisted at
+  `<experiment>/artifacts/trace.json`; and
+- each finite generated entrypoint requests one fail-open provider
+  flush on every terminal path.
+
+Generated projects do not create a Prometheus registry, metrics port,
+scrape server, or Pushgateway configuration. Application metrics come
+from the shared provider's standard OpenTelemetry `Meter`.
+
+When replacing the scaffold body, keep the generated observability
+setup and terminal `finally` block. Call `record_iteration()` and
+`record_evaluation()` at bounded lifecycle edges, and use
+`subprocess_env()` for every new child-process launch so it inherits
+the experiment trace. Diagnostic commands such as `check-regressions`
+and `openevolve-db` are not experiment execution paths and remain
+telemetry-free.
+
 ## TensorBoard logging
 
 Experiments log observations as TensorBoard event files under
@@ -2699,6 +2732,7 @@ Concrete markdown templates for every required file live in `references/template
 - `openevolve-agentic-fitness/*` → same OpenEvolve code scaffold as `evolve`, with `config.yaml` enabling agentic fitness research reranking and `run_config.json["variant"] = "openevolve-agentic-fitness"`
 - `tools-python-exp-pyproject.toml` → `tools/python_exp/pyproject.toml` (written by `init_project.py`)
 - `tools-python-exp-init.py` → `tools/python_exp/src/python_exp/__init__.py` (written by `init_project.py`)
+- `tools-python-exp-observability.py` → `tools/python_exp/src/python_exp/observability.py` (default-on signals, W3C propagation, trace artifact, and finite flush)
 - `project-scripts-new-experiment.py` → `<root>/scripts/new_experiment.py` (project-local wrapper, written by `init_project.py`)
 - `project-scripts-branch-experiment.py` → `<root>/scripts/branch_experiment.py` (project-local wrapper, written by `init_project.py`)
 - `project-scripts-run-experiments.py` → `<root>/scripts/run_experiments.py` (self-contained orchestrator with the project-level `run_baselines()` hook, written by `init_project.py`)

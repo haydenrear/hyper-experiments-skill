@@ -17,6 +17,8 @@ import runpy
 import sys
 from pathlib import Path
 
+from python_exp.observability import configure_experiment_observability
+
 CODE_DIR = Path(__file__).resolve().parent
 RUN_CONFIG_PATH = CODE_DIR / "run_config.json"
 
@@ -33,9 +35,8 @@ def _resolve(path_str: str) -> Path:
     return (CODE_DIR / path).resolve()
 
 
-def _default_best_program() -> Path:
-    cfg = _load_run_config()
-    output_dir = _resolve(cfg["paths"]["openevolve_output"])
+def _default_best_program(run_config: dict) -> Path:
+    output_dir = _resolve(run_config["paths"]["openevolve_output"])
     return output_dir / "best" / "best_program.py"
 
 
@@ -53,22 +54,43 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
 
-    program = _resolve(args.program) if args.program else _default_best_program()
-    if not program.exists():
-        print(
-            f"error: best program not found at {program}\n"
-            "       Run `uv run run-openevolve` first, or pass a checkpoint-local "
-            "best_program.py path.",
-            file=sys.stderr,
-        )
-        return 1
-    if args.print_path:
-        print(program)
+    run_config = _load_run_config()
+    observability = configure_experiment_observability(
+        run_config,
+        code_dir=CODE_DIR,
+    )
+    try:
+        if observability.trace_id is not None:
+            print(f"Trace ID: {observability.trace_id}")
+            print(f"Trace artifact: {observability.trace_artifact}")
 
-    sys.path.insert(0, str(program.parent))
-    sys.path.insert(0, str(CODE_DIR))
-    runpy.run_path(str(program), run_name="__main__")
-    return 0
+        program = (
+            _resolve(args.program)
+            if args.program
+            else _default_best_program(run_config)
+        )
+        if not program.exists():
+            print(
+                f"error: best program not found at {program}\n"
+                "       Run `uv run run-openevolve` first, or pass a "
+                "checkpoint-local best_program.py path.",
+                file=sys.stderr,
+            )
+            return 1
+        if args.print_path:
+            print(program)
+
+        observability.record_iteration(stage="best-program-dispatch")
+        sys.path.insert(0, str(program.parent))
+        sys.path.insert(0, str(CODE_DIR))
+        runpy.run_path(str(program), run_name="__main__")
+        return 0
+    finally:
+        observability.flush(
+            timeout_millis=run_config.get("observability", {}).get(
+                "flush_timeout_millis", 5_000
+            )
+        )
 
 
 if __name__ == "__main__":

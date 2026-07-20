@@ -10,7 +10,14 @@
     "tensorboard": "../tensorboard",
     "checkpoints": "../checkpoints",
     "logs": "../logs",
-    "data": "../data"
+    "data": "../data",
+    "trace_artifact": "../artifacts/trace.json"
+  },
+  "observability": {
+    "service_name": "{{experiment_id}}-{{slug}}",
+    "service_version": "0.1.0",
+    "log_mode": "otlp-only",
+    "flush_timeout_millis": 5000
   },
   "logging": {
     "tensorboard": {

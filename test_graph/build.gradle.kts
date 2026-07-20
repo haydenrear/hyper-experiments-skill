@@ -5,11 +5,16 @@ plugins {
 validationGraph {
     sourcesDir("sources")
 
-    testGraph("openevolveGeminiSmoke") {
+    testGraph("hyperAllVariantClaudeObservability") {
         node("sources/hyper_repo_scaffolded.py")
-        node("sources/openevolve_experiment_scaffolded.py")
-        node("sources/openevolve_gemini_short_run.py")
+        node("sources/hyper_variants_scaffolded.py")
+        node("sources/hyper_default_short_run.py")
+            .timeout("30m")
+        node("sources/openevolve_claude_sonnet_short_run.py")
             .timeout("45m")
-        node("sources/openevolve_best_program_runs.py")
+        node("sources/agentic_claude_sonnet_short_run.py")
+            .timeout("45m")
+        node("sources/hyper_observability_evidence.py")
+            .timeout("10m")
     }
 }

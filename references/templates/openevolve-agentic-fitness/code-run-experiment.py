@@ -60,7 +60,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -69,6 +68,10 @@ import urllib.request
 from pathlib import Path
 
 from python_exp import hello
+from python_exp.observability import (
+    ExperimentObservability,
+    configure_experiment_observability,
+)
 
 CODE_DIR = Path(__file__).resolve().parent
 RUN_CONFIG_PATH = CODE_DIR / "run_config.json"
@@ -206,7 +209,10 @@ def _wait_for_acp_server(experiment_root: Path, proc: subprocess.Popen) -> dict:
     raise RuntimeError(f"ACP server did not become ready; last server info={last_info!r}")
 
 
-def _start_acp_server(run_config: dict) -> tuple[subprocess.Popen, dict]:
+def _start_acp_server(
+    run_config: dict,
+    observability: ExperimentObservability,
+) -> tuple[subprocess.Popen, dict]:
     experiment_root = _find_experiment_root(CODE_DIR)
     if experiment_root is None:
         raise RuntimeError(f"could not locate this experiment's root from {CODE_DIR}")
@@ -240,12 +246,15 @@ def _start_acp_server(run_config: dict) -> tuple[subprocess.Popen, dict]:
             cwd=experiment_root,
             stdout=out,
             stderr=err,
-            env=os.environ.copy(),
+            env=observability.subprocess_env(
+                os.environ,
+                stage="acp-server-launch",
+            ),
         )
     try:
         info = _wait_for_acp_server(experiment_root, proc)
     except RuntimeError as e:
-        _stop_acp_server(proc, None)
+        _stop_acp_server(proc)
         raise RuntimeError(
             f"{e}. See {stdout_path} and {stderr_path} for launcher output."
         ) from e
@@ -262,27 +271,50 @@ def _start_acp_server(run_config: dict) -> tuple[subprocess.Popen, dict]:
     }
 
 
-def _stop_acp_server(proc: subprocess.Popen | None, server_info: dict | None) -> None:
+def _stop_acp_server(proc: subprocess.Popen | None) -> None:
     if proc is None:
         return
+    experiment_root = _find_experiment_root(CODE_DIR)
+    stop_server = _acp_skill_home() / "scripts" / "stop-server.py"
+    if experiment_root is None or not stop_server.exists():
+        print(
+            "warning: cannot safely stop ACP server because its managed "
+            "stop command is unavailable",
+            file=sys.stderr,
+        )
+        return
     try:
-        pid = int(server_info["pid"]) if server_info else proc.pid
-    except (KeyError, TypeError, ValueError):
-        pid = proc.pid
-    if proc.poll() is None:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            pass
-        try:
-            proc.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-            proc.wait(timeout=10)
-    print(f"openevolve: stopped ACP server pid={pid}")
+        stopped = subprocess.run(
+            [
+                str(stop_server),
+                "--project-root",
+                str(experiment_root),
+                "--stop-timeout",
+                "10",
+            ],
+            cwd=experiment_root,
+            timeout=45,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"warning: ACP managed stop failed: {exc}", file=sys.stderr)
+        return
+    if stopped.returncode != 0:
+        print(
+            f"warning: ACP managed stop exited {stopped.returncode}",
+            file=sys.stderr,
+        )
+        return
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        print(
+            "warning: ACP launcher remained after managed stop; refusing "
+            "unsafe PID-only signalling",
+            file=sys.stderr,
+        )
+        return
+    print("openevolve: stopped ACP server and registered agent processes")
 
 
 def _bind_local_api_base_to_acp_server(cfg, server_info: dict | None) -> str | None:
@@ -396,7 +428,10 @@ def _install_model_capacity_failover(run_config: dict) -> Path:
     return state_path
 
 
-async def _run_evolution(run_config: dict) -> int:
+async def _run_evolution(
+    run_config: dict,
+    observability: ExperimentObservability,
+) -> int:
     # Imported lazily so the smoke path doesn't pay the openevolve import
     # cost (and so a missing openevolve install only fails the real run).
     _install_model_capacity_failover(run_config)
@@ -417,7 +452,10 @@ async def _run_evolution(run_config: dict) -> int:
     try:
         api_base = getattr(cfg.llm, "api_base", None)
         if _api_base_is_local(api_base):
-            server_proc, server_info = _start_acp_server(run_config)
+            server_proc, server_info = _start_acp_server(
+                run_config,
+                observability,
+            )
         api_base = _bind_local_api_base_to_acp_server(cfg, server_info)
         _validate_configured_models(api_base, cfg)
         _ensure_api_key_for_local(api_base)
@@ -445,11 +483,13 @@ async def _run_evolution(run_config: dict) -> int:
             print(f"openevolve: resuming from {ckpt}")
             oe.database.load(str(ckpt))
 
+        observability.record_iteration(stage="openevolve-dispatch")
         best = await oe.run(
             iterations=iterations,
             target_score=target_score,
             checkpoint_path=str(_resolve(checkpoint)) if checkpoint else None,
         )
+        observability.record_iteration(stage="openevolve-complete")
 
         print()
         print("openevolve: evolution complete.")
@@ -458,23 +498,39 @@ async def _run_evolution(run_config: dict) -> int:
             print(f"  {k}: {v}")
         return 0
     finally:
-        _stop_acp_server(server_proc, server_info)
+        _stop_acp_server(server_proc)
 
 
 def main() -> int:
     run_config = load_run_config()
-    print(
-        f"Run config: {run_config['run_name']} "
-        f"(family={run_config['family']}, variant={run_config.get('variant')})"
+    observability = configure_experiment_observability(
+        run_config,
+        code_dir=CODE_DIR,
     )
-    print(hello())
+    try:
+        print(
+            f"Run config: {run_config['run_name']} "
+            f"(family={run_config['family']}, variant={run_config.get('variant')})"
+        )
+        print(hello())
+        if observability.trace_id is not None:
+            print(f"Trace ID: {observability.trace_id}")
+            print(f"Trace artifact: {observability.trace_artifact}")
+        else:
+            print("Trace ID: unavailable (business run continues)")
 
-    run_baselines(run_config)
+        run_baselines(run_config)
 
-    if os.environ.get("OPENEVOLVE_SMOKE"):
-        return _smoke_check(run_config["openevolve"])
+        if os.environ.get("OPENEVOLVE_SMOKE"):
+            return _smoke_check(run_config["openevolve"])
 
-    return asyncio.run(_run_evolution(run_config))
+        return asyncio.run(_run_evolution(run_config, observability))
+    finally:
+        observability.flush(
+            timeout_millis=run_config.get("observability", {}).get(
+                "flush_timeout_millis", 5_000
+            )
+        )
 
 
 if __name__ == "__main__":
