@@ -31,6 +31,7 @@ from __future__ import annotations
 import sys
 
 import python_exp
+from python_exp import observability as experiment_observability
 
 
 def check_imports() -> list[str]:
@@ -51,6 +52,15 @@ def check_imports() -> list[str]:
                 problems.append(
                     f"python_exp.hello() returned non-str: {type(result).__name__}"
                 )
+
+    if not callable(
+        getattr(experiment_observability, "configure_experiment_observability", None)
+    ):
+        problems.append(
+            "python_exp.observability.configure_experiment_observability is missing"
+        )
+    if not hasattr(experiment_observability, "ExperimentObservability"):
+        problems.append("python_exp.observability.ExperimentObservability is missing")
 
     # TODO: add an entry for every symbol or submodule from `python_exp`
     # that this experiment's `run_experiment.py` imports.

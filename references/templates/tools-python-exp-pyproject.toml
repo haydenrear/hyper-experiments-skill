@@ -7,7 +7,9 @@ name = "python-exp"
 version = "0.1.0"
 description = "Shared functions and modules used across experiments in this hyper-experiments project."
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+  "tracing-skill-observability @ git+https://github.com/haydenrear/tracing_skill.git@618d33169d9aa3e168c60ab9100fb7efb24a13e6#subdirectory=sources/python",
+]
 
 [tool.setuptools]
 package-dir = { "" = "src" }

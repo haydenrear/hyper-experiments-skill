@@ -5,7 +5,7 @@
 # [tool.uv.sources]
 # testgraphsdk = { path = "../sdk/python", editable = true }
 # ///
-"""Scaffold a temporary hyper-experiments repo with evolve as the default."""
+"""Scaffold a temporary hyper-experiments repo for current-template checks."""
 from __future__ import annotations
 
 import os
@@ -22,6 +22,7 @@ SPEC = (
     .kind("fixture")
     .tags("openevolve", "fixture")
     .timeout("120s")
+    .side_effects("fs:tmp")
     .output("repoRoot", "string")
 )
 
@@ -44,11 +45,11 @@ def main(ctx):
         "--root",
         str(work_dir),
         "--project-name",
-        "test-graph-openevolve-gemini",
+        "test-graph-all-variant-observability",
         "--description",
-        "test graph fixture for OpenEvolve Gemini validation",
+        "test graph fixture for all-variant observability validation",
         "--variant",
-        "evolve",
+        "default",
     ]
     proc = subprocess.run(
         cmd,

@@ -18,6 +18,7 @@ import sys
 
 import openevolve_capacity
 import python_exp
+from python_exp import observability as experiment_observability
 
 
 def check_imports() -> list[str]:
@@ -40,6 +41,15 @@ def check_imports() -> list[str]:
 
     if not hasattr(openevolve_capacity, "install"):
         problems.append("openevolve_capacity.install is missing")
+
+    if not callable(
+        getattr(experiment_observability, "configure_experiment_observability", None)
+    ):
+        problems.append(
+            "python_exp.observability.configure_experiment_observability is missing"
+        )
+    if not hasattr(experiment_observability, "ExperimentObservability"):
+        problems.append("python_exp.observability.ExperimentObservability is missing")
 
     try:
         import openevolve  # noqa: F401

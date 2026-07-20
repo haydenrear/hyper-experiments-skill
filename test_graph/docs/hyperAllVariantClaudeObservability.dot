@@ -1,0 +1,17 @@
+digraph "hyperAllVariantClaudeObservability" {
+  rankdir=LR;
+  node [shape=box,fontname="Courier"];
+  "hyper.repo.scaffolded" [label="hyper.repo.scaffolded\n(fixture, uv)"];
+  "hyper.variants.scaffolded" [label="hyper.variants.scaffolded\n(fixture, uv)"];
+  "hyper.default.short_run" [label="hyper.default.short_run\n(action, uv)"];
+  "hyper.evolve.claude_sonnet.short_run" [label="hyper.evolve.claude_sonnet.short_run\n(action, uv)"];
+  "hyper.agentic.claude_sonnet.short_run" [label="hyper.agentic.claude_sonnet.short_run\n(action, uv)"];
+  "hyper.observability.evidence" [label="hyper.observability.evidence\n(evidence, uv)"];
+  "hyper.repo.scaffolded" -> "hyper.variants.scaffolded";
+  "hyper.variants.scaffolded" -> "hyper.default.short_run";
+  "hyper.variants.scaffolded" -> "hyper.evolve.claude_sonnet.short_run";
+  "hyper.variants.scaffolded" -> "hyper.agentic.claude_sonnet.short_run";
+  "hyper.default.short_run" -> "hyper.observability.evidence";
+  "hyper.evolve.claude_sonnet.short_run" -> "hyper.observability.evidence";
+  "hyper.agentic.claude_sonnet.short_run" -> "hyper.observability.evidence";
+}

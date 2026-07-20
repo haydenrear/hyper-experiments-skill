@@ -27,6 +27,7 @@ import json
 from pathlib import Path
 
 from python_exp import hello
+from python_exp.observability import configure_experiment_observability
 from torch.utils.tensorboard import SummaryWriter
 
 CONFIG_PATH = Path(__file__).parent / "run_config.json"
@@ -42,7 +43,7 @@ def make_writer(config: dict) -> SummaryWriter:
     logdir.mkdir(parents=True, exist_ok=True)
     tb_cfg = config.get("logging", {}).get("tensorboard", {})
     return SummaryWriter(
-        logdir=str(logdir),
+        log_dir=str(logdir),
         flush_secs=tb_cfg.get("flush_secs", 30),
         max_queue=tb_cfg.get("max_queue", 100),
     )
@@ -75,19 +76,36 @@ def run_baselines(config: dict) -> None:
 
 def main() -> int:
     config = load_config()
-    print(f"Run config: {config['run_name']} (family={config['family']})")
-    print(hello())
-
-    run_baselines(config)
-
-    writer = make_writer(config)
+    observability = configure_experiment_observability(
+        config,
+        code_dir=Path(__file__).parent,
+    )
     try:
-        writer.add_scalar("scaffold/heartbeat", 1.0, global_step=0)
-        print(f"TensorBoard logdir: {writer.logdir}")
-        print(f"TODO: implement experiment logic for {config['experiment_id']}")
+        print(f"Run config: {config['run_name']} (family={config['family']})")
+        print(hello())
+        if observability.trace_id is not None:
+            print(f"Trace ID: {observability.trace_id}")
+            print(f"Trace artifact: {observability.trace_artifact}")
+        else:
+            print("Trace ID: unavailable (business run continues)")
+
+        run_baselines(config)
+
+        observability.record_iteration(stage="scaffold")
+        writer = make_writer(config)
+        try:
+            writer.add_scalar("scaffold/heartbeat", 1.0, global_step=0)
+            print(f"TensorBoard logdir: {writer.log_dir}")
+            print(f"TODO: implement experiment logic for {config['experiment_id']}")
+        finally:
+            writer.close()
+        return 0
     finally:
-        writer.close()
-    return 0
+        observability.flush(
+            timeout_millis=config.get("observability", {}).get(
+                "flush_timeout_millis", 5_000
+            )
+        )
 
 
 if __name__ == "__main__":
