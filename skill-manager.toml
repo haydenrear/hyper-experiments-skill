@@ -5,7 +5,7 @@
 #   skill:<name>[@<version>]  registry lookup
 #   file:<path>               sub-skill bundled in this directory
 skill_references = [
-    "github:haydenrear/acp-cdc-ai-python",
+    "github:haydenrear/acp-cdc-ai-python-skill",
 ]
 
 # CLI tools the skill needs on PATH. `spec` selects the installer backend:
