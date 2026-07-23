@@ -104,6 +104,14 @@ def main() -> int:
         tools_init.write_text(
             render_template(load_template("tools-python-exp-init.py"), vars_)
         )
+    tools_observability = python_exp / "src" / "python_exp" / "observability.py"
+    if not tools_observability.exists() or args.force:
+        tools_observability.write_text(
+            render_template(
+                load_template("tools-python-exp-observability.py"),
+                vars_,
+            )
+        )
 
     project_scripts = {
         "scripts/new_experiment.py": "project-scripts-new-experiment.py",
@@ -127,6 +135,7 @@ def main() -> int:
     print(f"  - experiments/baselines/index.md")
     print(f"  - tools/")
     print(f"  - tools/python_exp/ (shared library, importable as `python_exp`)")
+    print(f"    - default tracing, logging, native OTel metrics, and trace artifact")
     print(f"  - scripts/new_experiment.py    (project wrapper around the skill)")
     print(f"  - scripts/branch_experiment.py (project wrapper around the skill)")
     print(f"  - scripts/run_experiments.py   (project orchestrator with run_baselines() hook)")
