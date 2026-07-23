@@ -6,6 +6,7 @@ validationGraph {
     sourcesDir("sources")
 
     testGraph("hyperAllVariantClaudeObservability") {
+        standardNode("monitoring.cluster.assert.ready")
         node("sources/hyper_repo_scaffolded.py")
         node("sources/hyper_variants_scaffolded.py")
         node("sources/hyper_default_short_run.py")

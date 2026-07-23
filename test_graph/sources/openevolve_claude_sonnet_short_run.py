@@ -21,6 +21,7 @@ SPEC = (
     NodeSpec("hyper.evolve.claude_sonnet.short_run")
     .kind("action")
     .depends_on("hyper.variants.scaffolded")
+    .depends_on("monitoring.cluster.assert.ready")
     .tags("openevolve", "evolve", "claude", "sonnet", "claude-agent-acp", "live")
     .timeout("45m")
     .side_effects("fs:tmp", "net:local", "net:external")
