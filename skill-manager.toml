@@ -8,6 +8,8 @@
 skill_references = [
     # acp-cdc-ai-python-skill installs the "acp-cdc-ai-python" unit.
     "github:haydenrear/acp-cdc-ai-python-skill#dde427ed315409f9e869466f9ad45e11c37cfbb0",
+    # deploy-cdc installs the provider-owned "deploy-helm" monitoring facade.
+    "github:haydenrear/deploy-cdc#5a5a7e67422644d845d3afbeb78b99892963a658",
 ]
 
 # CLI tools the skill needs on PATH. `spec` selects the installer backend:

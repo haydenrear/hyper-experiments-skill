@@ -21,6 +21,7 @@ SPEC = (
     NodeSpec("hyper.agentic.claude_sonnet.short_run")
     .kind("action")
     .depends_on("hyper.variants.scaffolded")
+    .depends_on("monitoring.cluster.assert.ready")
     .tags(
         "openevolve",
         "agentic-fitness",

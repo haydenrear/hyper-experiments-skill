@@ -11,14 +11,19 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Iterable
 
 from testgraphsdk import NodeResult, NodeSpec, node
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from monitoring_ready_support import (  # noqa: E402
+    MONITORING_READY_NODE,
+    monitoring_cli_from_readiness,
+)
 
 ACTION_NODES = {
     "default": "hyper.default.short_run",
@@ -66,6 +71,7 @@ SPEC = (
     .depends_on(ACTION_NODES["default"])
     .depends_on(ACTION_NODES["evolve"])
     .depends_on(ACTION_NODES["agentic"])
+    .depends_on(MONITORING_READY_NODE)
     .tags("observability", "traces", "structured-logs", "metrics", "monitoring")
     .timeout("10m")
     .side_effects("fs:tmp", "net:local", "net:external")
@@ -368,10 +374,11 @@ def main(ctx):
     }
     expected_services.discard("")
 
-    monitoring = shutil.which("monitoring")
-    if monitoring is None:
+    try:
+        monitoring = monitoring_cli_from_readiness(ctx)
+    except RuntimeError as exc:
         return (
-            NodeResult.fail(ctx.node_id, "monitoring CLI is not installed on PATH")
+            NodeResult.fail(ctx.node_id, str(exc))
             .assertion("graph_trace_id_sources_match", trace_ids_match)
             .assertion("monitoring_cli_available", False)
             .publish("traceId", trace_id)

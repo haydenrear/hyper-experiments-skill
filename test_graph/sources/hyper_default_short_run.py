@@ -21,6 +21,7 @@ SPEC = (
     NodeSpec("hyper.default.short_run")
     .kind("action")
     .depends_on("hyper.variants.scaffolded")
+    .depends_on("monitoring.cluster.assert.ready")
     .tags("hyper-experiments", "default", "observability", "live")
     .timeout("30m")
     .side_effects("fs:tmp", "net:local", "net:external")
