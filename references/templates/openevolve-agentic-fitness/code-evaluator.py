@@ -33,10 +33,30 @@ Construction guidance:
 from __future__ import annotations
 
 import importlib.util
+import json
 import traceback
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutTimeout
+from pathlib import Path
 
 from openevolve.evaluation_result import EvaluationResult
+from python_exp.observability import (
+    ExperimentObservability,
+    configure_experiment_observability,
+)
+
+CODE_DIR = Path(__file__).resolve().parent
+_OBSERVABILITY: ExperimentObservability | None = None
+
+
+def _observability() -> ExperimentObservability:
+    global _OBSERVABILITY
+    if _OBSERVABILITY is None:
+        config = json.loads((CODE_DIR / "run_config.json").read_text())
+        _OBSERVABILITY = configure_experiment_observability(
+            config,
+            code_dir=CODE_DIR,
+        )
+    return _OBSERVABILITY
 
 
 def _load(program_path: str):
@@ -61,6 +81,7 @@ def _safe_float(x) -> float:
 
 def evaluate(program_path: str) -> EvaluationResult:
     """Full evaluation. Replace the body with this experiment's task."""
+    _observability().record_evaluation(stage="full")
     try:
         candidate = _load(program_path)
 
@@ -110,6 +131,7 @@ def evaluate_stage1(program_path: str) -> EvaluationResult:
     """Cheap pre-filter — confirm the candidate parses and run() exists.
     Cascade evaluation drops candidates that fail this stage before they
     reach the expensive `evaluate()`."""
+    _observability().record_evaluation(stage="stage1")
     try:
         candidate = _load(program_path)
         if not hasattr(candidate, "run"):
